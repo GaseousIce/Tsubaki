@@ -10,7 +10,7 @@ A Discord auto-moderation bot built with [discord.py](https://discordpy.readthed
 ## Setup
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/GaseousIce/Tsubaki.git
 cd automod-bot
 python -m venv .
 Scripts/activate
