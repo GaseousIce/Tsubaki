@@ -45,6 +45,26 @@ Required environment variables:
 python src/main.py
 ```
 
+## Deploy On Render (Free)
+
+Because Tsubaki is a Discord bot (long-running process), deploy it as a **Background Worker**, not a Web Service.
+
+This repo includes a `render.yaml` Blueprint config for a free worker.
+
+1. Push your code to GitHub.
+2. In Render, create a new Blueprint and select this repository.
+3. Render will detect `render.yaml` and create a worker service.
+4. In Render service settings, set secret env vars:
+    - `DISCORD_TOKEN`
+    - `GROQ_API_KEY`
+5. Deploy.
+
+Notes:
+
+- Free instances can spin down/restart; your bot reconnects when the worker is running.
+- File-based logs on Render are ephemeral. Use Render logs for live monitoring.
+- Keep Discord privileged intents (Server Members Intent) enabled in the Discord Developer Portal.
+
 ## Project Structure
 
 ```

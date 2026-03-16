@@ -11,6 +11,9 @@ from groq_service import GroqAskService
 load_dotenv()
 token = os.getenv("DISCORD_TOKEN")
 
+if not token:
+    raise ValueError("DISCORD_TOKEN is not set")
+
 Path("logs").mkdir(exist_ok=True)
 handler = logging.FileHandler(filename="logs/logs.log", encoding="utf-8", mode="w")
 handler.setFormatter(logging.Formatter("%(asctime)s:%(levelname)s:%(name)s: %(message)s"))
