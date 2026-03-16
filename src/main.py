@@ -6,6 +6,8 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+from openai_service import OpenAIAskService
+
 load_dotenv()
 token = os.getenv("DISCORD_TOKEN")
 
@@ -22,10 +24,19 @@ intents = discord.Intents.default()
 intents.members = True
 
 bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
+ai_service = None
 
 
 @bot.event
 async def setup_hook():
+    global ai_service
+    try:
+        ai_service = OpenAIAskService()
+        logger.info("OpenAI /ask service initialized")
+    except ValueError:
+        ai_service = None
+        logger.warning("OPENAI_API_KEY missing: /ask command is disabled")
+
     # Sync slash commands with Discord on startup.
     synced = await bot.tree.sync()
     logger.info("Synced %s slash command(s)", len(synced))
@@ -45,6 +56,30 @@ async def hello(interaction: discord.Interaction):
 async def ping(interaction: discord.Interaction):
     latency_ms = round(bot.latency * 1000)
     await interaction.response.send_message(f"Pong! {latency_ms} ms")
+
+
+@bot.tree.command(name="ask", description="Ask Tsubaki anything")
+async def ask(interaction: discord.Interaction, question: str):
+    if ai_service is None:
+        await interaction.response.send_message(
+            "The OpenAI API key is not configured yet.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(thinking=True)
+    try:
+        answer = await ai_service.ask(question)
+    except Exception:
+        logger.exception("OpenAI request for /ask failed")
+        await interaction.followup.send(
+            "I ran into an error while generating a reply. Please try again shortly."
+        )
+        return
+
+    if len(answer) > 2000:
+        answer = f"{answer[:1997]}..."
+
+    await interaction.followup.send(answer)
 
 
 bot.run(token, log_handler=handler, log_level=logging.DEBUG)
