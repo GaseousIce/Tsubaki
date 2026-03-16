@@ -39,7 +39,7 @@ Required environment variables:
 
 - `DISCORD_TOKEN`: your Discord bot token
 - `GROQ_API_KEY`: your Groq API key used by `/ask`
-- `GROQ_MODEL` (optional): defaults to `llama-3.1-8b-instant`
+- `GROQ_MODEL` (optional): defaults to `openai/gpt-oss-120b`
 
 ```bash
 python src/main.py

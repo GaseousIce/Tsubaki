@@ -11,7 +11,7 @@ class GroqAskService:
         if not resolved_api_key:
             raise ValueError("GROQ_API_KEY is not set")
 
-        self._model = model or os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+        self._model = model or os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
         self._client = AsyncGroq(api_key=resolved_api_key)
 
     async def ask(self, question: str) -> str:
