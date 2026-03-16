@@ -1,4 +1,4 @@
-# automod-bot
+# Tsubaki
 
 A Discord auto-moderation bot built with [discord.py](https://discordpy.readthedocs.io).
 
@@ -6,22 +6,29 @@ A Discord auto-moderation bot built with [discord.py](https://discordpy.readthed
 
 - Python 3.10+
 - A Discord bot token ([Discord Developer Portal](https://discord.com/developers/applications))
+- The following **Privileged Gateway Intents** must be enabled for your bot in the Developer Portal:
+  - **Message Content Intent**
+  - **Server Members Intent**
 
 ## Setup
 
 ```bash
 git clone https://github.com/GaseousIce/Tsubaki.git
-cd automod-bot
+cd Tsubaki
 python -m venv .
 Scripts/activate
+```
 
+Then install dependencies:
+
+```bash
 pip install -r requirements.txt
 ```
 
-Create a `.env` file in the project root:
+Copy `.env.example` to `.env` and fill in your values:
 
-```env
-DISCORD_TOKEN=your_bot_token_here
+```bash
+cp .env.example .env
 ```
 
 > **Never commit your `.env` file.** It is already listed in `.gitignore`.
@@ -33,12 +40,13 @@ python src/main.py
 ## Project Structure
 
 ```
-automod-bot/
+Tsubaki/
 ├── logs/              # Log files (not committed)
 │   └── automod.log
 ├── src/
 │   └── main.py        # Bot entry point
 ├── .env               # Environment variables (not committed)
+├── .env.example       # Template for environment variables
 ├── .gitignore
 ├── requirements.txt
 ├── ruff.toml          # Ruff formatter/linter config
@@ -47,4 +55,4 @@ automod-bot/
 
 ## Logging
 
-Logs are written to `logs/automod.log`. The `logs/` directory is created automatically on startup and is excluded from version control.
+Logs are written to `logs/automod.log` at INFO level; the `logs/` directory is created automatically on startup and is excluded from version control.
