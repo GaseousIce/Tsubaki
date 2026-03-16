@@ -2,12 +2,13 @@
 
 A Discord auto-moderation bot built with [discord.py](https://discordpy.readthedocs.io).
 
+The bot is controlled with slash commands (for example, `/hello` and `/ping`).
+
 ## Prerequisites
 
 - Python 3.10+
 - A Discord bot token ([Discord Developer Portal](https://discord.com/developers/applications))
 - The following **Privileged Gateway Intents** must be enabled for your bot in the Developer Portal:
-  - **Message Content Intent**
   - **Server Members Intent**
 
 ## Setup
