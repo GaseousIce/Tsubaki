@@ -1,6 +1,8 @@
 import logging
 import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from threading import Thread
 
 import discord
 from discord.ext import commands
@@ -20,6 +22,36 @@ handler.setFormatter(logging.Formatter("%(asctime)s:%(levelname)s:%(name)s: %(me
 logger = logging.getLogger("discord")
 logger.setLevel(logging.INFO)
 logger.addHandler(handler)
+
+
+def start_healthcheck_server() -> None:
+    try:
+        port = int(os.getenv("PORT", "10000"))
+    except ValueError:
+        port = 10000
+
+    class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path not in ("/", "/health"):
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, _format, *_args):
+            return
+
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    logger.info("Healthcheck server listening on port %s", port)
+    server.serve_forever()
+
+
+if os.getenv("PORT"):
+    Thread(target=start_healthcheck_server, daemon=True).start()
 
 intents = discord.Intents.default()
 intents.members = True
