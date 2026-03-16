@@ -8,7 +8,7 @@ The bot is controlled with slash commands (for example, `/hello`, `/ping`, and `
 
 - Python 3.10+
 - A Discord bot token ([Discord Developer Portal](https://discord.com/developers/applications))
-- An OpenAI API key (for `/ask`)
+- A Groq API key (for `/ask`)
 - The following **Privileged Gateway Intents** must be enabled for your bot in the Developer Portal:
     - **Server Members Intent**
 
@@ -38,8 +38,8 @@ cp .env.example .env
 Required environment variables:
 
 - `DISCORD_TOKEN`: your Discord bot token
-- `OPENAI_API_KEY`: your OpenAI API key used by `/ask`
-- `OPENAI_MODEL` (optional): defaults to `gpt-4o-mini`
+- `GROQ_API_KEY`: your Groq API key used by `/ask`
+- `GROQ_MODEL` (optional): defaults to `llama-3.1-8b-instant`
 
 ```bash
 python src/main.py
@@ -53,7 +53,7 @@ Tsubaki/
 │   └── automod.log
 ├── src/
 │   ├── main.py        # Bot entry point
-│   └── openai_service.py
+│   └── groq_service.py
 ├── .env               # Environment variables (not committed)
 ├── .env.example       # Template for environment variables
 ├── .gitignore
