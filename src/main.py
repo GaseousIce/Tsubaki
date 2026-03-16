@@ -6,16 +6,14 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from openai_service import OpenAIAskService
+from groq_service import GroqAskService
 
 load_dotenv()
 token = os.getenv("DISCORD_TOKEN")
 
 Path("logs").mkdir(exist_ok=True)
 handler = logging.FileHandler(filename="logs/logs.log", encoding="utf-8", mode="w")
-handler.setFormatter(
-    logging.Formatter("%(asctime)s:%(levelname)s:%(name)s: %(message)s")
-)
+handler.setFormatter(logging.Formatter("%(asctime)s:%(levelname)s:%(name)s: %(message)s"))
 logger = logging.getLogger("discord")
 logger.setLevel(logging.INFO)
 logger.addHandler(handler)
@@ -31,11 +29,11 @@ ai_service = None
 async def setup_hook():
     global ai_service
     try:
-        ai_service = OpenAIAskService()
-        logger.info("OpenAI /ask service initialized")
+        ai_service = GroqAskService()
+        logger.info("Groq /ask service initialized")
     except ValueError:
         ai_service = None
-        logger.warning("OPENAI_API_KEY missing: /ask command is disabled")
+        logger.warning("GROQ_API_KEY missing: /ask command is disabled")
 
     # Sync slash commands with Discord on startup.
     synced = await bot.tree.sync()
@@ -61,18 +59,16 @@ async def ping(interaction: discord.Interaction):
 @bot.tree.command(name="ask", description="Ask Tsubaki anything")
 async def ask(interaction: discord.Interaction, question: str):
     if ai_service is None:
-        await interaction.response.send_message(
-            "The OpenAI API key is not configured yet.", ephemeral=True
-        )
+        await interaction.response.send_message("The Groq API key is not configured yet.", ephemeral=True)
         return
 
     await interaction.response.defer(thinking=True)
     try:
         answer = await ai_service.ask(question)
     except Exception:
-        logger.exception("OpenAI request for /ask failed")
+        logger.exception("Groq request for /ask failed")
         await interaction.followup.send(
-            "I ran into an error while generating a reply. Please try again shortly."
+            "I ran into a Groq API error while generating a reply. Please try again shortly."
         )
         return
 
