@@ -4,12 +4,12 @@ services:
       runtime: python
       plan: free
       autoDeploy: true
-      buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-      startCommand: python src/main.py
+      buildCommand: curl -LsSf https://astral.sh/uv/install.sh | sh && $HOME/.local/bin/uv sync
+      startCommand: $HOME/.local/bin/uv run python src/main.py
       healthCheckPath: /health
       envVars:
           - key: PYTHON_VERSION
-            value: 3.11.11
+        value: 3.12.4
           - key: DISCORD_TOKEN
             sync: false
           - key: GROQ_API_KEY
