@@ -6,7 +6,7 @@ The bot is controlled with slash commands (for example, `/hello`, `/ping`, and `
 
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.12+
 - A Discord bot token ([Discord Developer Portal](https://discord.com/developers/applications))
 - A Groq API key (for `/ask`)
 - The following **Privileged Gateway Intents** must be enabled for your bot in the Developer Portal:
@@ -14,36 +14,20 @@ The bot is controlled with slash commands (for example, `/hello`, `/ping`, and `
 
 ## Setup
 
+Clone the repo and enter the directory:
+
 ```bash
 git clone https://github.com/GaseousIce/Tsubaki.git
 cd Tsubaki
-python -m venv .
-Scripts/activate
 ```
 
-Then install dependencies:
+Run the project with `uv`:
 
 ```bash
-pip install -r requirements.txt
+uv run python src/main.py
 ```
 
-Copy `.env.example` to `.env` and fill in your values:
-
-```bash
-cp .env.example .env
-```
-
-> **Never commit your `.env` file.** It is already listed in `.gitignore`.
-
-Required environment variables:
-
-- `DISCORD_TOKEN`: your Discord bot token
-- `GROQ_API_KEY`: your Groq API key used by `/ask`
-- `GROQ_MODEL` (optional): defaults to `openai/gpt-oss-120b`
-
-```bash
-python src/main.py
-```
+If you don't have `uv` installed, see the installation guide: https://docs.astral.sh/uv/getting-started/installation/
 
 ## Deploy On Render (Free)
 
@@ -77,7 +61,7 @@ Tsubaki/
 ├── .env               # Environment variables (not committed)
 ├── .env.example       # Template for environment variables
 ├── .gitignore
-├── requirements.txt
+├── pyproject.toml
 ├── ruff.toml          # Ruff formatter/linter config
 └── README.md
 ```
