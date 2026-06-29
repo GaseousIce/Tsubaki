@@ -9,6 +9,23 @@ logger = logging.getLogger("discord")
 
 
 def setup(bot):
+    @bot.tree.command(name="clear", description="Clear all messages in this channel")
+    async def clear(interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.channel.purge()
+            await interaction.followup.send("Channel cleared.", ephemeral=True)
+            logger.info(
+                "Channel %s manually cleared by %s",
+                interaction.channel.id,
+                interaction.user,
+            )
+        except discord.Forbidden:
+            await interaction.followup.send("I don't have permission to delete messages here.", ephemeral=True)
+        except discord.HTTPException as e:
+            logger.error("Manual clear failed in %s: %s", interaction.channel.id, e)
+            await interaction.followup.send("Failed to clear the channel.", ephemeral=True)
+
     channel_id = os.getenv("CLEAR_CHANNEL_ID")
     if not channel_id:
         logger.warning("CLEAR_CHANNEL_ID not set: daily clear disabled")
@@ -36,24 +53,3 @@ def setup(bot):
         await bot.wait_until_ready()
 
     daily_clear.start()
-
-    @bot.tree.command(name="clear", description="Clear all messages in this channel")
-    async def clear(interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        try:
-            await interaction.channel.purge()
-            await interaction.followup.send("Channel cleared.", ephemeral=True)
-            logger.info(
-                "Channel %s manually cleared by %s",
-                interaction.channel.id,
-                interaction.user,
-            )
-        except discord.Forbidden:
-            await interaction.followup.send(
-                "I don't have permission to delete messages here.", ephemeral=True
-            )
-        except discord.HTTPException as e:
-            logger.error("Manual clear failed in %s: %s", interaction.channel.id, e)
-            await interaction.followup.send(
-                "Failed to clear the channel.", ephemeral=True
-            )
