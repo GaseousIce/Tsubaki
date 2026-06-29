@@ -8,6 +8,7 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+from channel_clear import setup as setup_channel_clear
 from groq_service import GroqAskService
 
 load_dotenv()
@@ -69,6 +70,8 @@ async def setup_hook():
     except ValueError:
         ai_service = None
         logger.warning("GROQ_API_KEY missing: /ask command is disabled")
+
+    setup_channel_clear(bot)
 
     # Sync slash commands with Discord on startup.
     synced = await bot.tree.sync()
