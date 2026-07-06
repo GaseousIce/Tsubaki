@@ -2,7 +2,7 @@
 
 A Discord auto-moderation bot built with [discord.py](https://discordpy.readthedocs.io).
 
-The bot is controlled with slash commands (for example, `/hello`, `/ping`, and `/ask`).
+The bot is controlled with slash commands: `/hello`, `/ping`, `/ask`, and `/clear`.
 
 ## Prerequisites
 
@@ -41,6 +41,7 @@ This repo includes a `render.yaml` Blueprint config for a free web service.
 4. In Render service settings, set secret env vars:
     - `DISCORD_TOKEN`
     - `GROQ_API_KEY`
+    - `CLEAR_CHANNEL_ID` (optional, enables daily 3AM auto-clear)
 5. Deploy.
 
 Notes:
@@ -54,10 +55,11 @@ Notes:
 ```
 Tsubaki/
 ├── logs/              # Log files (not committed)
-│   └── automod.log
+│   └── logs.log
 ├── src/
 │   ├── main.py        # Bot entry point
-│   └── groq_service.py
+│   ├── groq_service.py
+│   └── channel_clear.py
 ├── .env               # Environment variables (not committed)
 ├── .env.example       # Template for environment variables
 ├── .gitignore
@@ -68,4 +70,4 @@ Tsubaki/
 
 ## Logging
 
-Logs are written to `logs/automod.log` at INFO level; the `logs/` directory is created automatically on startup and is excluded from version control.
+Logs are written to `logs/logs.log` at INFO level; the `logs/` directory is created automatically on startup and is excluded from version control.
