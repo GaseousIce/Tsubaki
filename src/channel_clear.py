@@ -11,7 +11,7 @@ logger = logging.getLogger("discord")
 
 async def purge_channel(channel: discord.abc.Messageable, ctx_info: str = "") -> bool:
     try:
-        await channel.purge()
+        await channel.purge(limit=None)
         logger.info("Cleared channel %s %s", channel.id, ctx_info)
         return True
     except discord.Forbidden:
