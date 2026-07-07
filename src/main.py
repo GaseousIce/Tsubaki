@@ -8,11 +8,16 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+from anti_phishing import fetch_official_blacklist
+from anti_phishing import setup as setup_anti_phishing
 from channel_clear import setup as setup_channel_clear
+from config import AppConfig
+from db import migrate
 from groq_service import GroqAskService
 
 load_dotenv()
 token = os.getenv("DISCORD_TOKEN")
+app_config = AppConfig.load()
 
 if not token:
     raise ValueError("DISCORD_TOKEN is not set")
@@ -56,6 +61,7 @@ if os.getenv("PORT"):
 
 intents = discord.Intents.default()
 intents.members = True
+intents.message_content = True
 
 bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
 ai_service = None
@@ -64,6 +70,8 @@ ai_service = None
 @bot.event
 async def setup_hook():
     global ai_service
+    await migrate()  # DB tables must exist before any feature uses them.
+
     try:
         ai_service = GroqAskService()
         logger.info("Groq /ask service initialized")
@@ -72,6 +80,8 @@ async def setup_hook():
         logger.warning("GROQ_API_KEY missing: /ask command is disabled")
 
     setup_channel_clear(bot)
+    setup_anti_phishing(bot, app_config.anti_phishing)
+    await fetch_official_blacklist(app_config.anti_phishing)
 
     # Sync slash commands with Discord on startup.
     synced = await bot.tree.sync()
