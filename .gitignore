@@ -30,3 +30,6 @@ build/
 
 # opencode CLI configuration
 .opencode/
+
+# Graphify knowledge graph output
+graphify-out/
