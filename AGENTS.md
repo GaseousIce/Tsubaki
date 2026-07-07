@@ -18,7 +18,7 @@ uv run ruff check --fix src/
 
 ## Setup
 
-Copy `.env.example` → `.env`. Required: `DISCORD_TOKEN`. Optional: `GROQ_API_KEY` (enables `/ask`), `GROQ_MODEL` (default `openai/gpt-oss-120b`), `CLEAR_CHANNEL_ID` (enables daily 3AM auto-clear), `PORT` (starts healthcheck server).
+Copy `.env.example` → `.env`. Required: `DISCORD_TOKEN`. Optional: `GROQ_API_KEY` (enables `/ask`), `CLEAR_CHANNEL_ID` (enables daily 3AM auto-clear), `PORT` (starts healthcheck server).
 
 ## Architecture
 

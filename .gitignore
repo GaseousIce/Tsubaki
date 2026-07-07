@@ -27,3 +27,9 @@ build/
 
 # VS Code
 .vscode/
+
+# opencode CLI configuration
+.opencode/
+
+# Graphify knowledge graph output
+graphify-out/
