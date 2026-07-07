@@ -1,3 +1,4 @@
+import hashlib
 import time
 
 # Keyed by user_id; value is list of (channel_id, timestamp, content) tuples.
@@ -33,8 +34,17 @@ def rate_limit_check(user_id: int, channel_id: int, content: str, rate_window: i
     # Prune stale entries.
     entries = [(ch, ts, ct) for ch, ts, ct in entries if now - ts <= rate_window]
 
+    # Hash the content to save memory
+    content_hash = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
+
     # Append current event.
-    entries.append((channel_id, now, content))
+    entries.append((channel_id, now, content_hash))
+    
+    # Cap entries per user to prevent unbounded growth
+    max_entries = rate_threshold * 2
+    if len(entries) > max_entries:
+        entries = entries[-max_entries:]
+
     _tracker[user_id] = entries
 
     unique_channels = {ch for ch, _, _ in entries}
@@ -42,7 +52,7 @@ def rate_limit_check(user_id: int, channel_id: int, content: str, rate_window: i
         return True
 
     # Same content in 2+ channels.
-    content_channels = {ch for ch, _, ct in entries if ct == content}
+    content_channels = {ch for ch, _, ct in entries if ct == content_hash}
     if len(content_channels) >= 2:
         return True
 
