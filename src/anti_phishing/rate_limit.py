@@ -39,7 +39,7 @@ def rate_limit_check(user_id: int, channel_id: int, content: str, rate_window: i
 
     # Append current event.
     entries.append((channel_id, now, content_hash))
-    
+
     # Cap entries per user to prevent unbounded growth
     max_entries = rate_threshold * 2
     if len(entries) > max_entries:
