@@ -1,10 +1,12 @@
 import logging
 import os
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from threading import Thread
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
@@ -23,7 +25,13 @@ if not token:
     raise ValueError("DISCORD_TOKEN is not set")
 
 Path("logs").mkdir(exist_ok=True)
-handler = logging.FileHandler(filename="logs/logs.log", encoding="utf-8", mode="w")
+handler = RotatingFileHandler(
+    filename="logs/logs.log",
+    encoding="utf-8",
+    mode="a",
+    maxBytes=5 * 1024 * 1024,  # 5 MB
+    backupCount=3,
+)
 handler.setFormatter(logging.Formatter("%(asctime)s:%(levelname)s:%(name)s: %(message)s"))
 logger = logging.getLogger("discord")
 logger.setLevel(logging.INFO)
@@ -51,7 +59,12 @@ def start_healthcheck_server() -> None:
         def log_message(self, _format, *_args):
             return
 
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    class SecureHealthcheckServer(ThreadingHTTPServer):
+        def finish_request(self, request, client_address):
+            request.settimeout(5.0)  # 5-second timeout on requests
+            super().finish_request(request, client_address)
+
+    server = SecureHealthcheckServer(("0.0.0.0", port), HealthHandler)
     logger.info("Healthcheck server listening on port %s", port)
     server.serve_forever()
 
@@ -105,6 +118,7 @@ async def ping(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="ask", description="Ask Tsubaki anything")
+@app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
 async def ask(interaction: discord.Interaction, question: str):
     if ai_service is None:
         await interaction.response.send_message("The Groq API key is not configured yet.", ephemeral=True)
@@ -124,6 +138,19 @@ async def ask(interaction: discord.Interaction, question: str):
         answer = f"{answer[:1997]}..."
 
     await interaction.followup.send(answer)
+
+
+@ask.error
+async def ask_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.CommandOnCooldown):
+        await interaction.response.send_message(
+            f"Please wait {error.retry_after:.1f} seconds before asking again.",
+            ephemeral=True,
+        )
+    else:
+        logger.error("Unhandled error in /ask command: %s", error)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("An error occurred.", ephemeral=True)
 
 
 bot.run(token, log_handler=handler, log_level=logging.DEBUG)

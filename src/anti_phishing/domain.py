@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -56,13 +57,16 @@ def extract_domains(text: str, embeds=None) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
     for url in raw:
-        # Strip scheme and path — keep only host.
-        host = re.sub(r"^https?://", "", url).split("/")[0].split("?")[0].lower()
-        # Remove port if present.
-        host = host.split(":")[0]
-        if host and host not in seen:
-            seen.add(host)
-            result.append(host)
+        try:
+            parsed = urlparse(url)
+            host = parsed.hostname
+            if host:
+                host = host.lower()
+                if host not in seen:
+                    seen.add(host)
+                    result.append(host)
+        except Exception:
+            pass
     return result
 
 

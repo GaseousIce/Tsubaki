@@ -2,6 +2,8 @@ import time
 
 # Keyed by user_id; value is list of (channel_id, timestamp, content) tuples.
 _tracker: dict[int, list[tuple[int, float, str]]] = {}
+_last_global_prune: float = 0.0
+GLOBAL_PRUNE_INTERVAL = 3600  # 1 hour
 
 
 def rate_limit_check(user_id: int, channel_id: int, content: str, rate_window: int, rate_threshold: int) -> bool:
@@ -10,7 +12,22 @@ def rate_limit_check(user_id: int, channel_id: int, content: str, rate_window: i
     - 3+ unique channels with any link within rate_window seconds, OR
     - same content posted in 2+ channels within rate_window seconds.
     """
+    global _last_global_prune
     now = time.time()
+
+    # Periodic global prune to prevent memory leaks from inactive users.
+    if now - _last_global_prune > GLOBAL_PRUNE_INTERVAL:
+        expired_keys = []
+        for uid, entries in list(_tracker.items()):
+            valid_entries = [(ch, ts, ct) for ch, ts, ct in entries if now - ts <= rate_window]
+            if not valid_entries:
+                expired_keys.append(uid)
+            else:
+                _tracker[uid] = valid_entries
+        for uid in expired_keys:
+            _tracker.pop(uid, None)
+        _last_global_prune = now
+
     entries = _tracker.get(user_id, [])
 
     # Prune stale entries.

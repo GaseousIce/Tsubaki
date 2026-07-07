@@ -332,9 +332,38 @@ async def bypass_role_list(interaction: discord.Interaction):
 @app_commands.describe(text="Pattern substring to detect in domains")
 async def patterns_add(interaction: discord.Interaction, text: str):
     await interaction.response.defer(ephemeral=True)
+    clean_text = text.strip().lower()
+    if len(clean_text) < 3:
+        await interaction.followup.send("❌ Pattern must be at least 3 characters long.", ephemeral=True)
+        return
+
+    overly_generic = {
+        "com",
+        "net",
+        "org",
+        "info",
+        "xyz",
+        "ru",
+        "edu",
+        "gov",
+        "co",
+        "io",
+        "uk",
+        "de",
+        "http",
+        "https",
+        "www",
+    }
+    if clean_text in overly_generic:
+        await interaction.followup.send(
+            f"❌ Pattern `{clean_text}` is too generic and cannot be blocked.",
+            ephemeral=True,
+        )
+        return
+
     try:
-        await db.add_pattern(text.strip().lower())
-        await interaction.followup.send(f"✅ Pattern `{text}` added.", ephemeral=True)
+        await db.add_pattern(clean_text)
+        await interaction.followup.send(f"✅ Pattern `{clean_text}` added.", ephemeral=True)
     except Exception as exc:
         logger.exception("antiphishing patterns add failed: %s", exc)
         await interaction.followup.send("❌ Failed to add pattern.", ephemeral=True)

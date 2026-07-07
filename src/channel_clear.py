@@ -24,6 +24,7 @@ async def purge_channel(channel: discord.abc.Messageable, ctx_info: str = "") ->
 
 def setup(bot):
     @bot.tree.command(name="clear", description="Clear all messages in this channel")
+    @app_commands.guild_only()
     @app_commands.default_permissions(manage_messages=True)
     @app_commands.checks.has_permissions(manage_messages=True)
     async def clear(interaction: discord.Interaction):
@@ -47,8 +48,14 @@ def setup(bot):
 
     @tasks.loop(time=time(hour=3))
     async def daily_clear():
-        channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
-        await purge_channel(channel, "(daily)")
+        try:
+            channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+            if channel:
+                await purge_channel(channel, "(daily)")
+            else:
+                logger.error("Daily clear channel %s not found", channel_id)
+        except Exception as e:
+            logger.exception("Failed to run daily channel clear: %s", e)
 
     @daily_clear.before_loop
     async def before_daily_clear():
