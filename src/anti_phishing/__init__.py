@@ -24,8 +24,6 @@ def setup(bot: commands.Bot, config: AntiPhishingConfig) -> None:
             return
 
         member = message.guild.get_member(message.author.id)
-        if member is None:
-            return
 
         # Fetch per-guild config; skip if disabled or DB is down.
         try:
@@ -39,7 +37,7 @@ def setup(bot: commands.Bot, config: AntiPhishingConfig) -> None:
 
         # Bypass role check.
         bypass_role_id = guild_cfg.get("bypass_role", 0)
-        if bypass_role_id and any(r.id == bypass_role_id for r in member.roles):
+        if member and bypass_role_id and any(r.id == bypass_role_id for r in member.roles):
             return
 
         # --- Detection pipeline ---

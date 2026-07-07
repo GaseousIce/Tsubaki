@@ -61,7 +61,7 @@ def _build_dm_embed(dm_message: str | None) -> discord.Embed:
 
 async def handle_detection(
     message: discord.Message,
-    member: discord.Member,
+    member: discord.Member | None,
     guild_cfg: dict,
     domain: str | None,
     reason: str,
@@ -76,6 +76,13 @@ async def handle_detection(
     6. Log to file
     """
     guild = message.guild
+
+    if member is None:
+        try:
+            member = await guild.fetch_member(message.author.id)
+        except discord.NotFound:
+            logger.warning("User %s not found in guild %s — cannot punish", message.author.id, guild.id)
+            return
 
     # 1. Log to DB.
     try:
