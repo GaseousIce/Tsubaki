@@ -8,6 +8,23 @@ from anti_phishing.config import get_guild_cfg, set_guild_cfg
 
 logger = logging.getLogger("discord")
 
+
+def _format_duration(seconds: int) -> str:
+    days, remainder = divmod(seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, secs = divmod(remainder, 60)
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if not days and minutes:
+        parts.append(f"{minutes}m")
+    if not days and not hours and secs:
+        parts.append(f"{secs}s")
+    return " ".join(parts) if parts else "0s"
+
+
 # ---------------------------------------------------------------------------
 # Command group
 # ---------------------------------------------------------------------------
@@ -104,12 +121,11 @@ async def cmd_status(interaction: discord.Interaction):
     alert_chs = ", ".join(f"<#{c}>" for c in cfg["alert_channels"]) or "none"
     mod_roles = ", ".join(f"<@&{r}>" for r in cfg["mod_roles"]) or "none"
     bypass = f"<@&{cfg['bypass_role']}>" if cfg["bypass_role"] else "none"
-    timeout_h = cfg["timeout_duration"] // 3600
 
     embed = discord.Embed(title="Anti-Phishing Config", color=discord.Color.blurple())
     embed.add_field(name="Enabled", value="✅ yes" if cfg["enabled"] else "❌ no", inline=True)
     embed.add_field(name="Action", value=cfg["action"], inline=True)
-    embed.add_field(name="Timeout", value=f"{timeout_h}h ({cfg['timeout_duration']}s)", inline=True)
+    embed.add_field(name="Timeout", value=_format_duration(cfg["timeout_duration"]), inline=True)
     embed.add_field(name="Alert channels", value=alert_chs, inline=False)
     embed.add_field(name="Mod roles", value=mod_roles, inline=False)
     embed.add_field(name="Bypass role", value=bypass, inline=False)
