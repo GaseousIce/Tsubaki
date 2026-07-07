@@ -9,10 +9,11 @@ _client = None
 async def get_db():
     global _client
     if _client is None:
-        _client = create_client(
-            url=os.environ["TURSO_DATABASE_URL"],
-            auth_token=os.environ["TURSO_AUTH_TOKEN"],
-        )
+        url = os.getenv("TURSO_DATABASE_URL")
+        auth_token = os.getenv("TURSO_AUTH_TOKEN")
+        if not url or not auth_token:
+            raise ValueError("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be set")
+        _client = create_client(url=url, auth_token=auth_token)
     return _client
 
 
