@@ -143,14 +143,25 @@ async def ask(interaction: discord.Interaction, question: str):
 @ask.error
 async def ask_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CommandOnCooldown):
-        await interaction.response.send_message(
-            f"Please wait {error.retry_after:.1f} seconds before asking again.",
-            ephemeral=True,
-        )
+        try:
+            await interaction.response.send_message(
+                f"Please wait {error.retry_after:.1f} seconds before asking again.",
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            pass
     else:
         logger.error("Unhandled error in /ask command: %s", error)
-        if not interaction.response.is_done():
-            await interaction.response.send_message("An error occurred.", ephemeral=True)
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send("An error occurred.", ephemeral=True)
+            else:
+                try:
+                    await interaction.response.send_message("An error occurred.", ephemeral=True)
+                except (discord.InteractionResponded, discord.HTTPException):
+                    await interaction.followup.send("An error occurred.", ephemeral=True)
+        except discord.HTTPException:
+            pass
 
 
 bot.run(token, log_handler=handler, log_level=logging.DEBUG)
