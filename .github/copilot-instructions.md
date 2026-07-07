@@ -1,107 +1,41 @@
 # Copilot Instructions for Tsubaki
 
-## Project Overview
+Discord auto-mod bot with anti-phishing. Python 3.12+, discord.py, uv.
 
-Tsubaki is a Discord auto-moderation bot built with discord.py. It provides slash commands for user interaction and integrates with Groq's API for AI-powered responses.
-
-**Key Technologies:**
-- discord.py (async Discord bot framework)
-- Groq API (for `/ask` AI responses)
-- Python 3.12+
-- uv (package manager)
-
-## Build, Test & Linting
-
-### Running the Bot
+## Run
 
 ```bash
-# Run the bot locally
 uv run python src/main.py
-
-# The bot starts a health check HTTP server on port 10000 (configurable via PORT env var)
-```
-
-### Linting and Formatting
-
-Ruff is configured for linting and formatting. Configuration is in `ruff.toml`:
-- Line length: 120 characters
-- Quote style: double quotes
-- Indent: 4 spaces
-- Enabled rules: E (pycodestyle errors), F (pyflakes), I (isort)
-
-```bash
-# Check for linting issues
 uv run ruff check src/
-
-# Format code
 uv run ruff format src/
-
-# Both check and format
 uv run ruff check --fix src/
 ```
 
-### Environment Setup
+Ruff in `ruff.toml`: 120 width, double quotes, 4-space indent, lint E/F/I.
 
-Copy `.env.example` to `.env` and populate:
-- `DISCORD_TOKEN` - Discord bot token (required)
-- `GROQ_API_KEY` - API key for Groq AI (required for `/ask` command)
-- `GROQ_MODEL` - AI model (defaults to `openai/gpt-oss-120b`)
-- `PORT` - HTTP health check port (defaults to 10000, only used if set)
+## Env
 
-## Architecture
+Copy `.env.example` → `.env`. Required: `DISCORD_TOKEN`, `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`. Optional: `GROQ_API_KEY` (enables `/ask`), `GROQ_MODEL` (overrides config.toml model), `CLEAR_CHANNEL_ID` (daily 3AM auto-clear), `PORT` (healthcheck at `/health`).
 
-### Core Structure
+Missing Turso vars crash at startup. Missing Groq key gracefully disables `/ask`.
 
-- **`src/main.py`** - Bot entry point
-  - Initializes Discord intents (with Server Members Intent enabled)
-  - Registers slash commands: `/hello`, `/ping`, `/ask`
-  - Starts healthcheck HTTP server in background (for Render.com deployment)
-  - Syncs commands with Discord on startup
-  - Handles logging to `logs/logs.log`
+## Structure
 
-- **`src/groq_service.py`** - Groq AI integration
-  - `GroqAskService` wraps the Groq async API
-  - Configurable via `GROQ_API_KEY` and `GROQ_MODEL` env vars
-  - System prompt establishes "Tsubaki" personality (cute anime-girl vibe with weeb slang)
-  - Response truncated to Discord's 2000-char limit
-  - Temperature: 0.8, max tokens: 500
+- `main.py` — entrypoint. Slash commands: `/hello`, `/ping`, `/ask` (1/5s cooldown), `/clear`, `/antiphishing` (group with subcommands). Syncs tree on startup. Healthcheck daemon thread only when `PORT` set. Logs to `logs/logs.log` (RotatingFileHandler, 5 MB, 3 backups).
+- `config.py` — `AppConfig.load()` reads `config.toml`.
+- `db.py` — Turso/libsql client. `migrate()` creates 4 tables; must be called first in `setup_hook()`.
+- `groq_service.py` — `GroqAskService` wraps `AsyncGroq`. Temp 0.8, max 500 tokens. Anime-girl system prompt.
+- `channel_clear.py` — `/clear` command + daily 3AM auto-clear via `tasks.loop`.
+- `anti_phishing/` — 7 files. Detection pipeline: (1) official + custom blacklist, (2) typosquat patterns, (3) rate-limit heuristic (3+ channels in 10s). On hit: delete → DM → punish (timeout/kick/ban/warn) → alert mod channels. Per-guild config in DB. Rate-limit in-memory, prunes hourly.
 
-### Slash Commands
+## Intents
 
-1. **`/hello`** - Simple greeting, always available
-2. **`/ping`** - Returns bot latency in ms
-3. **`/ask [question]`** - AI-powered response via Groq (disabled if `GROQ_API_KEY` not set)
+Default + `members=True` + `message_content=True`. Server Members + Message Content intents must be enabled in Discord Dev Portal.
 
-### Deployment (Render.com)
+## Error Handling
 
-The project includes `render.yaml` for free Render.com deployment:
-- Starts HTTP healthcheck server (required for free tier to keep service alive)
-- Logs written to `logs/logs.log` (ephemeral on Render)
-- Recreates bot connection on service wake-up
-
-## Key Conventions
-
-### Logging
-
-- All logs go to `logs/logs.log` at INFO level (DEBUG during bot runtime)
-- Discord library logs are prefixed with "discord"
-- Healthcheck server requests are silenced (no logs)
-
-### Error Handling
-
-- Missing `DISCORD_TOKEN` raises `ValueError` at startup (fatal)
-- Missing `GROQ_API_KEY` gracefully disables `/ask` with warning
-- Groq API errors are logged and user receives error message (command can retry)
-- Long AI responses truncated with `...` to fit Discord's 2000 char limit
-
-### Async Patterns
-
-- All Groq API calls use `AsyncGroq` for non-blocking I/O
-- Slash command handlers are async; deferred responses for long operations (`/ask`)
-- Healthcheck server runs in daemon thread (doesn't block bot shutdown)
-
-### Discord Configuration
-
-- **Intents**: Default intents + `members=True` (Server Members Intent required)
-- **Command type**: Slash commands (app commands)
-- **Command prefix**: Mentions only (commands are slash-based)
+- Missing `DISCORD_TOKEN`: fatal `ValueError`.
+- Missing `GROQ_API_KEY`: `/ask` gracefully disabled.
+- Groq API errors: logged, user gets retry message.
+- AI responses > 2000 chars: truncated with `...`.
+- All slash handlers async; long ops use deferred response.

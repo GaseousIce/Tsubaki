@@ -1,19 +1,21 @@
 import db
 
-_DEFAULT_CONFIG = {
-    "enabled": True,
-    "action": "timeout",
-    "timeout_duration": 604800,
-    "alert_channels": [],
-    "mod_roles": [],
-    "dm_message": None,
-    "bypass_role": 0,
-}
+
+def _default_config() -> dict:
+    return {
+        "enabled": True,
+        "action": "timeout",
+        "timeout_duration": 604800,
+        "alert_channels": [],
+        "mod_roles": [],
+        "dm_message": None,
+        "bypass_role": 0,
+    }
 
 
 async def get_guild_cfg(guild_id: int) -> dict:
     """Return per-guild anti-phishing config merged with defaults."""
-    return await db.get_guild_config(guild_id, _DEFAULT_CONFIG)
+    return await db.get_guild_config(guild_id, _default_config())
 
 
 async def set_guild_cfg(guild_id: int, **kwargs) -> dict:
