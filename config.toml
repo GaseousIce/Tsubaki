@@ -7,3 +7,7 @@ rate_threshold = 3
 rate_window = 10
 # Max fetch attempts for domain blacklist (5s, 10s, 20s backoff).
 fetch_retries = 3
+
+[groq]
+# The model to use with Groq API for /ask.
+model = "openai/gpt-oss-120b"

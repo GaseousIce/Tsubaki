@@ -73,7 +73,7 @@ async def setup_hook():
     await migrate()  # DB tables must exist before any feature uses them.
 
     try:
-        ai_service = GroqAskService()
+        ai_service = GroqAskService(model=app_config.groq.model)
         logger.info("Groq /ask service initialized")
     except ValueError:
         ai_service = None

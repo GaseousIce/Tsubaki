@@ -14,8 +14,6 @@ services:
             sync: false
           - key: GROQ_API_KEY
             sync: false
-          - key: GROQ_MODEL
-            value: openai/gpt-oss-120b
           - key: TURSO_DATABASE_URL
             sync: false
           - key: TURSO_AUTH_TOKEN
