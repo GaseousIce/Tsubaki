@@ -123,6 +123,26 @@ async def is_in_blocklist(domain: str) -> bool:
     return bool(rows.rows)
 
 
+async def get_blocklist_source(domain: str) -> str | None:
+    db = await get_db()
+    rows = await db.execute(
+        "SELECT source FROM custom_blocklist WHERE domain = ?",
+        (domain,),
+    )
+    if rows.rows:
+        return rows.rows[0]["source"]
+    return None
+
+
+async def remove_from_blocklist(domain: str) -> bool:
+    db = await get_db()
+    result = await db.execute(
+        "DELETE FROM custom_blocklist WHERE domain = ?",
+        (domain,),
+    )
+    return bool(result.rows_affected)
+
+
 # --- Typosquat patterns ---
 
 
