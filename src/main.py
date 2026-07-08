@@ -126,11 +126,13 @@ async def ask(interaction: discord.Interaction, question: str):
 
     await interaction.response.defer(thinking=True)
     try:
-        answer = await ai_service.ask(question)
+        async with interaction.channel.typing():
+            answer = await ai_service.ask(question)
     except Exception:
         logger.exception("Groq request for /ask failed")
         await interaction.followup.send(
-            "I ran into a Groq API error while generating a reply. Please try again shortly."
+            "Uuu... (╥﹏╥) My brainwaves got all tangled up! I couldn't reach my thoughts right now. "
+            "Please try asking me again in a bit, okay? (｡>﹏<｡)"
         )
         return
 
@@ -145,7 +147,7 @@ async def ask_error(interaction: discord.Interaction, error: app_commands.AppCom
     if isinstance(error, app_commands.CommandOnCooldown):
         try:
             await interaction.response.send_message(
-                f"Please wait {error.retry_after:.1f} seconds before asking again.",
+                f"H-Hey! Don't spam me! ( ｀皿´) Please wait {error.retry_after:.1f}s before asking again, baka!",
                 ephemeral=True,
             )
         except discord.HTTPException:
