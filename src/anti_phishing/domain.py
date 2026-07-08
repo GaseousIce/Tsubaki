@@ -9,42 +9,53 @@ import db
 
 logger = logging.getLogger("discord")
 
-# Official blacklist — populated during setup().
 official: set[str] = set()
 
-_BLACKLIST_URL = "https://raw.githubusercontent.com/nikolaischunk/discord-phishing-links/main/domain-list.json"
+_BLACKLIST_URL = (
+    "https://raw.githubusercontent.com/nikolaischunk/discord-phishing-links/refs/heads/main/domain-list.json"
+)
+_SUSPICIOUS_LIST_URL = (
+    "https://raw.githubusercontent.com/nikolaischunk/discord-phishing-links/refs/heads/main/suspicious-list.json"
+)
 
 _URL_RE = re.compile(r"https?://(?:[-\w.]|(?:/[\w\-./~%!#$&'()*+,;=:?@]))+")
 
 
-async def fetch_blacklist(retries: int = 3) -> set[str]:
-    """
-    Fetch the official phishing domain list with exponential backoff.
-    Returns a set of domains, or an empty set if all attempts fail.
-    """
-    delays = [5, 10, 20]
+async def _fetch_url(url: str, retries: int, delays: list[int], label: str) -> set[str]:
     for attempt in range(retries):
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(_BLACKLIST_URL, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     resp.raise_for_status()
                     data = await resp.json(content_type=None)
-                    # data is either a list of domains or {"domains": [...]}
                     if isinstance(data, list):
                         return set(data)
                     return set(data.get("domains", []))
         except Exception as exc:
-            logger.warning("Blacklist fetch attempt %d/%d failed: %s", attempt + 1, retries, exc)
+            logger.warning("%s fetch attempt %d/%d failed: %s", label, attempt + 1, retries, exc)
             if attempt < retries - 1:
                 await asyncio.sleep(delays[attempt])
     return set()
 
 
-def extract_domains(text: str, embeds=None) -> list[str]:
-    """
-    Extract unique domains from message text and optional embed URLs/descriptions.
-    Returns a deduplicated list of bare hostnames (no scheme/path).
-    """
+async def fetch_blacklist(retries: int = 3) -> set[str]:
+    delays = [5, 10, 20]
+    official_domains, suspicious_domains = await asyncio.gather(
+        _fetch_url(_BLACKLIST_URL, retries, delays, "Blacklist"),
+        _fetch_url(_SUSPICIOUS_LIST_URL, retries, delays, "Suspicious list"),
+    )
+    merged = official_domains | suspicious_domains
+    if merged:
+        logger.info(
+            "Fetched %d official + %d suspicious = %d total domains",
+            len(official_domains),
+            len(suspicious_domains),
+            len(merged),
+        )
+    return merged
+
+
+def extract_urls(text: str, embeds=None) -> list[str]:
     raw = list(_URL_RE.findall(text or ""))
 
     if embeds:
@@ -58,50 +69,51 @@ def extract_domains(text: str, embeds=None) -> list[str]:
     result: list[str] = []
     for url in raw:
         try:
-            parsed = urlparse(url)
-            host = parsed.hostname
-            if host:
-                host = host.lower()
-                if host not in seen:
-                    seen.add(host)
-                    result.append(host)
+            url_clean = url.strip().rstrip("/")
+            if url_clean:
+                url_lower = url_clean.lower()
+                if url_lower not in seen:
+                    seen.add(url_lower)
+                    result.append(url_lower)
         except Exception:
             pass
     return result
 
 
-async def find_in_blacklists(domains: list[str]) -> tuple[str | None, str | None]:
-    """
-    Check domains against the official set and the DB custom blocklist.
-    Returns (domain, source) where source is "blacklist" or "custom", or (None, None).
-    """
-    for domain in domains:
-        if domain in official:
-            return (domain, "blacklist")
-    for domain in domains:
+def _extract_hostnames(urls: list[str]) -> set[str]:
+    hostnames: set[str] = set()
+    for url in urls:
         try:
-            if await db.is_in_blocklist(domain):
-                return (domain, "custom")
+            parsed = urlparse(url)
+            host = parsed.hostname
+            if host:
+                hostnames.add(host.lower())
+        except Exception:
+            pass
+    return hostnames
+
+
+async def find_in_blacklists(urls: list[str]) -> tuple[str | None, str | None]:
+    hostnames = _extract_hostnames(urls)
+
+    for hostname in hostnames:
+        if hostname in official:
+            return (hostname, "official_blacklist")
+
+    for hostname in hostnames:
+        try:
+            source = await db.get_blocklist_source(hostname)
+            if source:
+                return (hostname, f"custom_blocklist ({source})")
         except Exception as exc:
-            logger.warning("DB blocklist check failed for %s: %s", domain, exc)
-    return (None, None)
+            logger.warning("DB blocklist check failed for %s: %s", hostname, exc)
 
+    for url in urls:
+        try:
+            source = await db.get_blocklist_source(url)
+            if source:
+                return (url, f"custom_blocklist ({source})")
+        except Exception as exc:
+            logger.warning("DB blocklist check failed for URL %s: %s", url, exc)
 
-async def match_typosquat(domains: list[str]) -> tuple[str | None, str | None]:
-    """
-    Check domains against typosquat patterns stored in DB.
-    Pattern matched as a whole word segment between . / - boundaries.
-    Returns (domain, matched_pattern) or (None, None).
-    """
-    try:
-        patterns = await db.get_patterns()
-    except Exception as exc:
-        logger.warning("DB pattern fetch failed: %s", exc)
-        return (None, None)
-
-    for domain in domains:
-        for pattern in patterns:
-            escaped = re.escape(pattern)
-            if re.search(rf"(?:^|[.\-]){escaped}(?:$|[.\-])", domain):
-                return (domain, pattern)
     return (None, None)
