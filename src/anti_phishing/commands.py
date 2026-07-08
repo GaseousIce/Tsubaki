@@ -25,6 +25,243 @@ def _format_duration(seconds: int) -> str:
     return " ".join(parts) if parts else "0s"
 
 
+def _build_settings_embed(guild: discord.Guild, cfg: dict) -> discord.Embed:
+    alert_chs = ", ".join(f"<#{c}>" for c in cfg["alert_channels"]) or "none"
+    mod_roles = ", ".join(f"<@&{r}>" for r in cfg["mod_roles"]) or "none"
+    bypass = f"<@&{cfg['bypass_role']}>" if cfg["bypass_role"] else "none"
+
+    embed = discord.Embed(title=f"🛡️ Anti-Phishing Settings — {guild.name}", color=discord.Color.blurple())
+    embed.add_field(name="Status", value="🟢 Enabled" if cfg["enabled"] else "🔴 Disabled", inline=True)
+    embed.add_field(name="Action", value=cfg["action"].capitalize(), inline=True)
+    embed.add_field(name="Timeout Duration", value=_format_duration(cfg["timeout_duration"]), inline=True)
+    embed.add_field(name="Alert Channels", value=alert_chs, inline=False)
+    embed.add_field(name="Mod Roles", value=mod_roles, inline=False)
+    embed.add_field(name="Bypass Role", value=bypass, inline=False)
+
+    dm_msg = cfg.get("dm_message")
+    if dm_msg:
+        if len(dm_msg) > 100:
+            dm_msg = f"{dm_msg[:97]}..."
+    else:
+        dm_msg = "Default"
+    embed.add_field(name="Custom DM Message", value=dm_msg, inline=False)
+
+    embed.set_footer(text="Use the components below to configure settings. Ephemeral session expires in 3 mins.")
+    return embed
+
+
+class TimeoutDurationModal(discord.ui.Modal, title="Set Timeout Duration"):
+    duration_input = discord.ui.TextInput(
+        label="Duration (e.g. 7d, 28d, or seconds)",
+        placeholder="7d",
+        required=True,
+        max_length=20,
+    )
+
+    def __init__(self, parent_view: "SettingsDashboardView"):
+        super().__init__()
+        self.parent_view = parent_view
+        self.duration_input.default = _format_duration(parent_view.cfg.get("timeout_duration", 604800))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        from anti_phishing.actions import _parse_duration
+
+        duration_str = self.duration_input.value.strip()
+        secs = _parse_duration(duration_str)
+
+        self.parent_view.cfg = await set_guild_cfg(interaction.guild_id, timeout_duration=secs)
+        embed = _build_settings_embed(interaction.guild, self.parent_view.cfg)
+        await interaction.response.edit_message(embed=embed, view=self.parent_view)
+        await interaction.followup.send(f"✅ Timeout duration set to **{secs}s** ({duration_str}).", ephemeral=True)
+
+
+class CustomDMModal(discord.ui.Modal, title="Set Custom DM Message"):
+    dm_input = discord.ui.TextInput(
+        label="DM message (leave blank to reset to default)",
+        style=discord.TextStyle.paragraph,
+        placeholder="Your account has been sending phishing messages...",
+        required=False,
+        max_length=1000,
+    )
+
+    def __init__(self, parent_view: "SettingsDashboardView"):
+        super().__init__()
+        self.parent_view = parent_view
+        current_msg = parent_view.cfg.get("dm_message")
+        if current_msg:
+            self.dm_input.default = current_msg
+
+    async def on_submit(self, interaction: discord.Interaction):
+        value = self.dm_input.value.strip() or None
+        self.parent_view.cfg = await set_guild_cfg(interaction.guild_id, dm_message=value)
+        embed = _build_settings_embed(interaction.guild, self.parent_view.cfg)
+        await interaction.response.edit_message(embed=embed, view=self.parent_view)
+        if value:
+            await interaction.followup.send("✅ Custom DM message set.", ephemeral=True)
+        else:
+            await interaction.followup.send("✅ DM message reset to default.", ephemeral=True)
+
+
+class SettingsDashboardView(discord.ui.View):
+    def __init__(self, guild_id: int, cfg: dict):
+        super().__init__(timeout=180)
+        self.guild_id = guild_id
+        self.cfg = cfg
+
+        enabled = cfg.get("enabled", True)
+        self.toggle_btn = discord.ui.Button(
+            label="Disable Anti-Phishing" if enabled else "Enable Anti-Phishing",
+            style=discord.ButtonStyle.danger if enabled else discord.ButtonStyle.success,
+            custom_id="toggle_bot",
+            row=0,
+        )
+        self.toggle_btn.callback = self.toggle_callback
+        self.add_item(self.toggle_btn)
+
+        self.action_select = discord.ui.Select(
+            placeholder="Select Punishment Action...",
+            options=[
+                discord.SelectOption(
+                    label="Timeout",
+                    value="timeout",
+                    description="Timeout the member",
+                    default=(cfg["action"] == "timeout"),
+                ),
+                discord.SelectOption(
+                    label="Kick",
+                    value="kick",
+                    description="Kick the member",
+                    default=(cfg["action"] == "kick"),
+                ),
+                discord.SelectOption(
+                    label="Ban",
+                    value="ban",
+                    description="Ban the member",
+                    default=(cfg["action"] == "ban"),
+                ),
+                discord.SelectOption(
+                    label="Warn",
+                    value="warn",
+                    description="DM only, no guild action",
+                    default=(cfg["action"] == "warn"),
+                ),
+            ],
+            custom_id="action_select",
+            row=1,
+        )
+        self.action_select.callback = self.action_callback
+        self.add_item(self.action_select)
+
+        self.timeout_btn = discord.ui.Button(
+            label="Set Timeout Duration", style=discord.ButtonStyle.secondary, custom_id="set_timeout", row=2
+        )
+        self.timeout_btn.callback = self.timeout_callback
+        self.add_item(self.timeout_btn)
+
+        self.dm_btn = discord.ui.Button(
+            label="Set Custom DM Message", style=discord.ButtonStyle.secondary, custom_id="set_dm", row=2
+        )
+        self.dm_btn.callback = self.dm_callback
+        self.add_item(self.dm_btn)
+
+        self.switch_btn = discord.ui.Button(
+            label="Roles & Channels ➡️", style=discord.ButtonStyle.primary, custom_id="switch_page", row=3
+        )
+        self.switch_btn.callback = self.switch_callback
+        self.add_item(self.switch_btn)
+
+    async def toggle_callback(self, interaction: discord.Interaction):
+        new_val = not self.cfg.get("enabled", True)
+        self.cfg = await set_guild_cfg(interaction.guild_id, enabled=new_val)
+        embed = _build_settings_embed(interaction.guild, self.cfg)
+        self.toggle_btn.label = "Disable Anti-Phishing" if new_val else "Enable Anti-Phishing"
+        self.toggle_btn.style = discord.ButtonStyle.danger if new_val else discord.ButtonStyle.success
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def action_callback(self, interaction: discord.Interaction):
+        selected_action = self.action_select.values[0]
+        self.cfg = await set_guild_cfg(interaction.guild_id, action=selected_action)
+
+        for option in self.action_select.options:
+            option.default = option.value == selected_action
+
+        embed = _build_settings_embed(interaction.guild, self.cfg)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def timeout_callback(self, interaction: discord.Interaction):
+        modal = TimeoutDurationModal(self)
+        await interaction.response.send_modal(modal)
+
+    async def dm_callback(self, interaction: discord.Interaction):
+        modal = CustomDMModal(self)
+        await interaction.response.send_modal(modal)
+
+    async def switch_callback(self, interaction: discord.Interaction):
+        view = RolesChannelsDashboardView(self.guild_id, self.cfg)
+        embed = _build_settings_embed(interaction.guild, self.cfg)
+        embed.set_footer(text="Manage roles & channels configuration. Ephemeral session expires in 3 mins.")
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class RolesChannelsDashboardView(discord.ui.View):
+    def __init__(self, guild_id: int, cfg: dict):
+        super().__init__(timeout=180)
+        self.guild_id = guild_id
+        self.cfg = cfg
+
+        self.channel_select = discord.ui.ChannelSelect(
+            placeholder="Select Alert Channels...",
+            channel_types=[discord.ChannelType.text],
+            min_values=0,
+            max_values=5,
+            custom_id="channel_select",
+            row=0,
+        )
+        self.channel_select.callback = self.channel_callback
+        self.add_item(self.channel_select)
+
+        self.mod_select = discord.ui.RoleSelect(
+            placeholder="Select Mod Ping Roles...", min_values=0, max_values=5, custom_id="mod_select", row=1
+        )
+        self.mod_select.callback = self.mod_callback
+        self.add_item(self.mod_select)
+
+        self.bypass_select = discord.ui.RoleSelect(
+            placeholder="Select Bypass Role...", min_values=0, max_values=1, custom_id="bypass_select", row=2
+        )
+        self.bypass_select.callback = self.bypass_callback
+        self.add_item(self.bypass_select)
+
+        self.back_btn = discord.ui.Button(
+            label="⬅️ Back to Main", style=discord.ButtonStyle.primary, custom_id="back_to_main", row=3
+        )
+        self.back_btn.callback = self.back_callback
+        self.add_item(self.back_btn)
+
+    async def channel_callback(self, interaction: discord.Interaction):
+        selected_ids = [ch.id for ch in self.channel_select.values]
+        self.cfg = await set_guild_cfg(interaction.guild_id, alert_channels=selected_ids)
+        embed = _build_settings_embed(interaction.guild, self.cfg)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def mod_callback(self, interaction: discord.Interaction):
+        selected_ids = [r.id for r in self.mod_select.values]
+        self.cfg = await set_guild_cfg(interaction.guild_id, mod_roles=selected_ids)
+        embed = _build_settings_embed(interaction.guild, self.cfg)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def bypass_callback(self, interaction: discord.Interaction):
+        selected_id = self.bypass_select.values[0].id if self.bypass_select.values else 0
+        self.cfg = await set_guild_cfg(interaction.guild_id, bypass_role=selected_id)
+        embed = _build_settings_embed(interaction.guild, self.cfg)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def back_callback(self, interaction: discord.Interaction):
+        view = SettingsDashboardView(self.guild_id, self.cfg)
+        embed = _build_settings_embed(interaction.guild, self.cfg)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
 # ---------------------------------------------------------------------------
 # Command group
 # ---------------------------------------------------------------------------
@@ -37,100 +274,8 @@ antiphishing = app_commands.Group(
 )
 
 # ---------------------------------------------------------------------------
-# Sub-groups
-# ---------------------------------------------------------------------------
-
-alert_group = app_commands.Group(name="alert", description="Manage alert channels", parent=antiphishing)
-mod_role_group = app_commands.Group(name="mod-role", description="Manage mod-ping roles", parent=antiphishing)
-bypass_role_group = app_commands.Group(name="bypass-role", description="Manage bypass role", parent=antiphishing)
-patterns_group = app_commands.Group(name="patterns", description="Manage typosquat patterns", parent=antiphishing)
-
-
-# ---------------------------------------------------------------------------
 # Top-level commands
 # ---------------------------------------------------------------------------
-
-
-@antiphishing.command(name="action", description="Set the punishment action for detected phishing")
-@app_commands.describe(action="Punishment to apply: timeout, kick, ban, or warn")
-@app_commands.choices(
-    action=[
-        app_commands.Choice(name="timeout", value="timeout"),
-        app_commands.Choice(name="kick", value="kick"),
-        app_commands.Choice(name="ban", value="ban"),
-        app_commands.Choice(name="warn", value="warn"),
-    ]
-)
-async def cmd_action(interaction: discord.Interaction, action: str):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        await set_guild_cfg(interaction.guild_id, action=action)
-        await interaction.followup.send(f"✅ Punishment action set to **{action}**.", ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing action failed: %s", exc)
-        await interaction.followup.send("❌ Failed to update config.", ephemeral=True)
-
-
-@antiphishing.command(name="timeout", description="Set the timeout duration (e.g. 7d, 2w, 28d)")
-@app_commands.describe(duration="Duration string, e.g. 7d, 2w, 28d (max 28d)")
-async def cmd_timeout(interaction: discord.Interaction, duration: str):
-    await interaction.response.defer(ephemeral=True)
-    from anti_phishing.actions import _parse_duration
-
-    secs = _parse_duration(duration)
-    try:
-        await set_guild_cfg(interaction.guild_id, timeout_duration=secs)
-        await interaction.followup.send(f"✅ Timeout duration set to **{secs}s** ({duration}).", ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing timeout failed: %s", exc)
-        await interaction.followup.send("❌ Failed to update config.", ephemeral=True)
-
-
-@antiphishing.command(name="enable", description="Enable anti-phishing for this server")
-async def cmd_enable(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        await set_guild_cfg(interaction.guild_id, enabled=True)
-        await interaction.followup.send("✅ Anti-phishing **enabled**.", ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing enable failed: %s", exc)
-        await interaction.followup.send("❌ Failed to update config.", ephemeral=True)
-
-
-@antiphishing.command(name="disable", description="Disable anti-phishing for this server")
-async def cmd_disable(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        await set_guild_cfg(interaction.guild_id, enabled=False)
-        await interaction.followup.send("⏸️ Anti-phishing **disabled**.", ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing disable failed: %s", exc)
-        await interaction.followup.send("❌ Failed to update config.", ephemeral=True)
-
-
-@antiphishing.command(name="status", description="Show current anti-phishing config for this server")
-async def cmd_status(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        cfg = await get_guild_cfg(interaction.guild_id)
-    except Exception as exc:
-        logger.exception("antiphishing status failed: %s", exc)
-        await interaction.followup.send("❌ Failed to fetch config.", ephemeral=True)
-        return
-
-    alert_chs = ", ".join(f"<#{c}>" for c in cfg["alert_channels"]) or "none"
-    mod_roles = ", ".join(f"<@&{r}>" for r in cfg["mod_roles"]) or "none"
-    bypass = f"<@&{cfg['bypass_role']}>" if cfg["bypass_role"] else "none"
-
-    embed = discord.Embed(title="Anti-Phishing Config", color=discord.Color.blurple())
-    embed.add_field(name="Enabled", value="✅ yes" if cfg["enabled"] else "❌ no", inline=True)
-    embed.add_field(name="Action", value=cfg["action"], inline=True)
-    embed.add_field(name="Timeout", value=_format_duration(cfg["timeout_duration"]), inline=True)
-    embed.add_field(name="Alert channels", value=alert_chs, inline=False)
-    embed.add_field(name="Mod roles", value=mod_roles, inline=False)
-    embed.add_field(name="Bypass role", value=bypass, inline=False)
-    embed.add_field(name="Custom DM", value=cfg.get("dm_message") or "default", inline=False)
-    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @antiphishing.command(name="stats", description="Show detection stats for this server")
@@ -160,238 +305,14 @@ async def cmd_stats(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-@antiphishing.command(name="dm-message", description="Set a custom DM recovery message (omit to reset to default)")
-@app_commands.describe(text="Custom DM text; leave blank to reset to default")
-async def cmd_dm_message(interaction: discord.Interaction, text: str = ""):
-    await interaction.response.defer(ephemeral=True)
-    value = text.strip() or None
-    try:
-        await set_guild_cfg(interaction.guild_id, dm_message=value)
-        if value:
-            await interaction.followup.send("✅ Custom DM message set.", ephemeral=True)
-        else:
-            await interaction.followup.send("✅ DM message reset to default.", ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing dm-message failed: %s", exc)
-        await interaction.followup.send("❌ Failed to update config.", ephemeral=True)
-
-
-# ---------------------------------------------------------------------------
-# Alert channel commands
-# ---------------------------------------------------------------------------
-
-
-@alert_group.command(name="add", description="Add an alert channel")
-@app_commands.describe(channel="Text channel to post phishing alerts in")
-async def alert_add(interaction: discord.Interaction, channel: discord.TextChannel):
+@antiphishing.command(name="settings", description="Open interactive anti-phishing settings dashboard")
+async def cmd_settings(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     try:
         cfg = await get_guild_cfg(interaction.guild_id)
-        channels = cfg["alert_channels"]
-        if channel.id not in channels:
-            channels.append(channel.id)
-            await set_guild_cfg(interaction.guild_id, alert_channels=channels)
-        await interaction.followup.send(f"✅ {channel.mention} added to alert channels.", ephemeral=True)
+        embed = _build_settings_embed(interaction.guild, cfg)
+        view = SettingsDashboardView(interaction.guild_id, cfg)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     except Exception as exc:
-        logger.exception("antiphishing alert add failed: %s", exc)
-        await interaction.followup.send("❌ Failed to update config.", ephemeral=True)
-
-
-@alert_group.command(name="remove", description="Remove an alert channel")
-@app_commands.describe(channel="Channel to remove from alerts")
-async def alert_remove(interaction: discord.Interaction, channel: discord.TextChannel):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        cfg = await get_guild_cfg(interaction.guild_id)
-        channels = cfg["alert_channels"]
-        if channel.id in channels:
-            channels.remove(channel.id)
-            await set_guild_cfg(interaction.guild_id, alert_channels=channels)
-        await interaction.followup.send(f"✅ {channel.mention} removed from alert channels.", ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing alert remove failed: %s", exc)
-        await interaction.followup.send("❌ Failed to update config.", ephemeral=True)
-
-
-@alert_group.command(name="list", description="List current alert channels")
-async def alert_list(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        cfg = await get_guild_cfg(interaction.guild_id)
-        channels = cfg["alert_channels"]
-        if channels:
-            value = "\n".join(f"<#{c}>" for c in channels)
-        else:
-            value = "No alert channels configured."
-        embed = discord.Embed(title="Alert Channels", description=value, color=discord.Color.blurple())
-        await interaction.followup.send(embed=embed, ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing alert list failed: %s", exc)
-        await interaction.followup.send("❌ Failed to fetch config.", ephemeral=True)
-
-
-# ---------------------------------------------------------------------------
-# Mod role commands
-# ---------------------------------------------------------------------------
-
-
-@mod_role_group.command(name="add", description="Add a role to the alert ping list")
-@app_commands.describe(role="Role to ping on detections")
-async def mod_role_add(interaction: discord.Interaction, role: discord.Role):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        cfg = await get_guild_cfg(interaction.guild_id)
-        roles = cfg["mod_roles"]
-        if role.id not in roles:
-            roles.append(role.id)
-            await set_guild_cfg(interaction.guild_id, mod_roles=roles)
-        await interaction.followup.send(f"✅ {role.mention} added to mod-role ping list.", ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing mod-role add failed: %s", exc)
-        await interaction.followup.send("❌ Failed to update config.", ephemeral=True)
-
-
-@mod_role_group.command(name="remove", description="Remove a role from the alert ping list")
-@app_commands.describe(role="Role to remove")
-async def mod_role_remove(interaction: discord.Interaction, role: discord.Role):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        cfg = await get_guild_cfg(interaction.guild_id)
-        roles = cfg["mod_roles"]
-        if role.id in roles:
-            roles.remove(role.id)
-            await set_guild_cfg(interaction.guild_id, mod_roles=roles)
-        await interaction.followup.send(f"✅ {role.mention} removed from mod-role ping list.", ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing mod-role remove failed: %s", exc)
-        await interaction.followup.send("❌ Failed to update config.", ephemeral=True)
-
-
-@mod_role_group.command(name="list", description="List mod roles")
-async def mod_role_list(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        cfg = await get_guild_cfg(interaction.guild_id)
-        roles = cfg["mod_roles"]
-        value = "\n".join(f"<@&{r}>" for r in roles) if roles else "No mod roles configured."
-        embed = discord.Embed(title="Mod Roles", description=value, color=discord.Color.blurple())
-        await interaction.followup.send(embed=embed, ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing mod-role list failed: %s", exc)
-        await interaction.followup.send("❌ Failed to fetch config.", ephemeral=True)
-
-
-# ---------------------------------------------------------------------------
-# Bypass role commands
-# ---------------------------------------------------------------------------
-
-
-@bypass_role_group.command(name="set", description="Set a role that bypasses all phishing checks")
-@app_commands.describe(role="Role to exempt from checks")
-async def bypass_role_set(interaction: discord.Interaction, role: discord.Role):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        await set_guild_cfg(interaction.guild_id, bypass_role=role.id)
-        await interaction.followup.send(f"✅ {role.mention} set as bypass role.", ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing bypass-role set failed: %s", exc)
-        await interaction.followup.send("❌ Failed to update config.", ephemeral=True)
-
-
-@bypass_role_group.command(name="remove", description="Remove the bypass role")
-async def bypass_role_remove(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        await set_guild_cfg(interaction.guild_id, bypass_role=0)
-        await interaction.followup.send("✅ Bypass role removed.", ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing bypass-role remove failed: %s", exc)
-        await interaction.followup.send("❌ Failed to update config.", ephemeral=True)
-
-
-@bypass_role_group.command(name="list", description="Show current bypass role")
-async def bypass_role_list(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        cfg = await get_guild_cfg(interaction.guild_id)
-        bypass = cfg.get("bypass_role", 0)
-        value = f"<@&{bypass}>" if bypass else "No bypass role set."
-        embed = discord.Embed(title="Bypass Role", description=value, color=discord.Color.blurple())
-        await interaction.followup.send(embed=embed, ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing bypass-role list failed: %s", exc)
-        await interaction.followup.send("❌ Failed to fetch config.", ephemeral=True)
-
-
-# ---------------------------------------------------------------------------
-# Typosquat pattern commands
-# ---------------------------------------------------------------------------
-
-
-@patterns_group.command(name="add", description="Add a typosquat pattern (e.g. discord-nitro)")
-@app_commands.describe(text="Pattern substring to detect in domains")
-async def patterns_add(interaction: discord.Interaction, text: str):
-    await interaction.response.defer(ephemeral=True)
-    clean_text = text.strip().lower()
-    if len(clean_text) < 3:
-        await interaction.followup.send("❌ Pattern must be at least 3 characters long.", ephemeral=True)
-        return
-
-    overly_generic = {
-        "com",
-        "net",
-        "org",
-        "info",
-        "xyz",
-        "ru",
-        "edu",
-        "gov",
-        "co",
-        "io",
-        "uk",
-        "de",
-        "http",
-        "https",
-        "www",
-    }
-    if clean_text in overly_generic:
-        await interaction.followup.send(
-            f"❌ Pattern `{clean_text}` is too generic and cannot be blocked.",
-            ephemeral=True,
-        )
-        return
-
-    try:
-        await db.add_pattern(clean_text)
-        await interaction.followup.send(f"✅ Pattern `{clean_text}` added.", ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing patterns add failed: %s", exc)
-        await interaction.followup.send("❌ Failed to add pattern.", ephemeral=True)
-
-
-@patterns_group.command(name="remove", description="Remove a typosquat pattern")
-@app_commands.describe(text="Pattern to remove")
-async def patterns_remove(interaction: discord.Interaction, text: str):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        removed = await db.remove_pattern(text.strip().lower())
-        if removed:
-            await interaction.followup.send(f"✅ Pattern `{text}` removed.", ephemeral=True)
-        else:
-            await interaction.followup.send(f"⚠️ Pattern `{text}` not found.", ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing patterns remove failed: %s", exc)
-        await interaction.followup.send("❌ Failed to remove pattern.", ephemeral=True)
-
-
-@patterns_group.command(name="list", description="List all typosquat patterns")
-async def patterns_list(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        patterns = await db.get_patterns()
-        value = "\n".join(f"`{p}`" for p in patterns) if patterns else "No patterns configured."
-        embed = discord.Embed(title="Typosquat Patterns", description=value, color=discord.Color.blurple())
-        await interaction.followup.send(embed=embed, ephemeral=True)
-    except Exception as exc:
-        logger.exception("antiphishing patterns list failed: %s", exc)
-        await interaction.followup.send("❌ Failed to fetch patterns.", ephemeral=True)
+        logger.exception("antiphishing settings failed: %s", exc)
+        await interaction.followup.send("❌ Failed to open settings dashboard.", ephemeral=True)
