@@ -66,12 +66,15 @@ def setup(bot: commands.Bot, config: AntiPhishingConfig) -> None:
                 config.rate_threshold,
             ):
                 reason = "rate_limit"
-                detected_url = extracted_urls[0]
-                for url in extracted_urls:
-                    try:
-                        await db.add_to_blocklist(url, "rate_limit")
-                    except Exception as exc:
-                        logger.warning("add_to_blocklist rate_limit failed for %s: %s", url, exc)
+                if extracted_urls:
+                    detected_url = extracted_urls[0]
+                    for url in extracted_urls:
+                        try:
+                            await db.add_to_blocklist(url, "rate_limit")
+                        except Exception as exc:
+                            logger.warning("add_to_blocklist rate_limit failed for %s: %s", url, exc)
+                else:
+                    detected_url = None
 
         if reason:
             rate_limit.clear_user(message.author.id)
