@@ -57,7 +57,7 @@ def setup(bot):
             interaction.channel,
             ctx_info=f"by {interaction.user}",
             limit=limit,
-            check=purge_check if (user is not None or bots_only is not None) else None,
+            check=purge_check if (user is not None or bots_only is not None) else lambda m: True,
         )
 
         if count is not None:
