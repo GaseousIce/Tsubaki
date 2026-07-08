@@ -66,7 +66,7 @@ def official_domains():
 
 
 @pytest.fixture
-def simcord_bot():
+def simcord_bot(anti_phishing_config):
     intents = discord.Intents.default()
     intents.members = True
     intents.message_content = True
@@ -79,6 +79,14 @@ def simcord_bot():
     @bot.tree.command(name="ping", description="Check if the bot is online")
     async def ping(interaction: discord.Interaction):
         await interaction.response.send_message("Pong! 0 ms")
+
+    from anti_phishing import setup as setup_anti_phishing
+
+    setup_anti_phishing(bot, anti_phishing_config)
+
+    from channel_clear import setup as setup_channel_clear
+
+    setup_channel_clear(bot)
 
     async def setup_hook():
         await bot.tree.sync()
