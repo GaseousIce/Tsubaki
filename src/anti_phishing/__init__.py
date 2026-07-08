@@ -41,36 +41,22 @@ def setup(bot: commands.Bot, config: AntiPhishingConfig) -> None:
             return
 
         # --- Detection pipeline ---
-        detected_domain: str | None = None
+        detected_url: str | None = None
         reason: str | None = None
 
-        # 1. Official + custom blacklist.
+        # 1. Extract URLs and check blacklists.
         try:
-            extracted = domain.extract_domains(message.content, message.embeds)
+            extracted_urls = domain.extract_urls(message.content, message.embeds)
         except Exception:
-            extracted = []
+            extracted_urls = []
 
-        if extracted:
+        if extracted_urls:
             try:
-                detected_domain, reason = await domain.find_in_blacklists(extracted)
+                detected_url, reason = await domain.find_in_blacklists(extracted_urls)
             except Exception as exc:
                 logger.warning("find_in_blacklists error: %s", exc)
 
-        # 2. Typosquat pattern scan (only if no hit yet).
-        if not reason and extracted:
-            try:
-                matched_domain, matched_pattern = await domain.match_typosquat(extracted)
-                if matched_domain:
-                    try:
-                        await db.add_to_blocklist(matched_domain, "typosquat")
-                    except Exception as exc:
-                        logger.warning("add_to_blocklist failed: %s", exc)
-                    detected_domain = matched_domain
-                    reason = "pattern"
-            except Exception as exc:
-                logger.warning("match_typosquat error: %s", exc)
-
-        # 3. Rate-limit heuristic.
+        # 2. Rate-limit heuristic.
         if not reason:
             if config.rate_enabled and rate_limit.rate_limit_check(
                 message.author.id,
@@ -80,11 +66,20 @@ def setup(bot: commands.Bot, config: AntiPhishingConfig) -> None:
                 config.rate_threshold,
             ):
                 reason = "rate_limit"
+                if extracted_urls:
+                    detected_url = extracted_urls[0]
+                    for url in extracted_urls:
+                        try:
+                            await db.add_to_blocklist(url, "rate_limit")
+                        except Exception as exc:
+                            logger.warning("add_to_blocklist rate_limit failed for %s: %s", url, exc)
+                else:
+                    detected_url = None
 
         if reason:
             rate_limit.clear_user(message.author.id)
             try:
-                await actions.handle_detection(message, member, guild_cfg, detected_domain, reason)
+                await actions.handle_detection(message, member, guild_cfg, detected_url, reason)
             except Exception as exc:
                 logger.exception("handle_detection raised unexpectedly: %s", exc)
 
