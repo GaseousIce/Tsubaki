@@ -31,31 +31,31 @@ def _parse_duration(duration: str) -> int:
 def _build_dm_embed(dm_message: str | None) -> discord.Embed:
     """Build the security alert DM embed. Uses custom dm_message if provided."""
     description = (
-        dm_message if dm_message else "You may have interacted with a phishing link. Take these steps immediately:"
+        dm_message if dm_message else "Your account has been sending phishing messages and is likely compromised. Take these steps immediately to secure it:"
     )
     embed = discord.Embed(
-        title="Security Alert",
+        title="Account Compromised",
         description=description,
         color=discord.Color.red(),
     )
-    embed.add_field(name="1. Reset Your Password", value="https://discord.com/settings/account", inline=False)
+    embed.add_field(name="1. Reset Your Password", value="Your password may have been stolen — change it now\nhttps://discord.com/settings/account", inline=False)
     embed.add_field(
         name="2. Enable Two-Factor Authentication",
-        value="https://discord.com/settings/account",
+        value="Prevent further unauthorized access\nhttps://discord.com/settings/account",
         inline=False,
     )
-    embed.add_field(name="3. Revoke Authorized Apps", value="Settings > Authorized Apps", inline=False)
+    embed.add_field(name="3. Review & Revoke Suspicious Apps", value="Check for unknown or unauthorized apps\nSettings > Authorized Apps", inline=False)
     embed.add_field(
         name="4. Reset Your Discord Token",
-        value="Settings > Advanced > Regenerate Token",
+        value="Invalidate stolen session tokens\nSettings > Advanced > Regenerate Token",
         inline=False,
     )
     embed.add_field(
         name="5. Contact Discord Support",
-        value="https://support.discord.com/hc/en-us",
+        value="Report the compromise\nhttps://support.discord.com/hc/en-us",
         inline=False,
     )
-    embed.set_footer(text="If you didn't click anything, you can ignore this message.")
+    embed.set_footer(text="Your account was used to send phishing links. Do not ignore this.")
     return embed
 
 
