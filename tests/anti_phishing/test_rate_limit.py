@@ -12,12 +12,12 @@ class TestRateLimitPrune:
 
         # Two users: one with all stale entries, one with mixed (some stale, some fresh).
         rate_limit._tracker[1] = [
-            (10, now - 10000, "hash_a"),
-            (11, now - 10000, "hash_b"),
+            (10, now - 10000, hash("hash_a")),
+            (11, now - 10000, hash("hash_b")),
         ]
         rate_limit._tracker[2] = [
-            (20, now - 10000, "hash_c"),
-            (21, now - 100, "hash_d"),
+            (20, now - 10000, hash("hash_c")),
+            (21, now - 100, hash("hash_d")),
         ]
 
         # This triggers the global prune in rate_limit_check.

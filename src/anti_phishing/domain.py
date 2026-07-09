@@ -34,7 +34,7 @@ async def _fetch_url(url: str, retries: int, delays: list[int], label: str) -> s
         except Exception as exc:
             logger.warning("%s fetch attempt %d/%d failed: %s", label, attempt + 1, retries, exc)
             if attempt < retries - 1:
-                await asyncio.sleep(delays[attempt])
+                await asyncio.sleep(delays[min(attempt, len(delays) - 1)])
     return set()
 
 

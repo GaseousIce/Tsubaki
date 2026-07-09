@@ -1,8 +1,7 @@
-import hashlib
 import time
 
 # Keyed by user_id; value is list of (channel_id, timestamp, content) tuples.
-_tracker: dict[int, list[tuple[int, float, str]]] = {}
+_tracker: dict[int, list[tuple[int, float, int]]] = {}
 _last_global_prune: float = 0.0
 GLOBAL_PRUNE_INTERVAL = 3600  # 1 hour
 
@@ -35,7 +34,7 @@ def rate_limit_check(user_id: int, channel_id: int, content: str, rate_window: i
     entries = [(ch, ts, ct) for ch, ts, ct in entries if now - ts <= rate_window]
 
     # Hash the content to save memory
-    content_hash = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
+    content_hash = hash(content)
 
     # Append current event.
     entries.append((channel_id, now, content_hash))
