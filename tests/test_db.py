@@ -44,6 +44,23 @@ class TestMigrate:
         assert mock_db.execute.call_count >= 8
 
 
+class TestAntiPhishingConfig:
+    async def test_set_guild_cfg_merges_and_persists(self, mock_db):
+        from anti_phishing.config import set_guild_cfg
+
+        result = await set_guild_cfg(12345, enabled=False)
+        assert result["enabled"] is False
+        assert result["action"] == "timeout"
+
+        call_args = mock_db.execute.call_args
+        assert "INSERT INTO guild_configs" in call_args[0][0]
+
+        import json
+        parsed = json.loads(call_args[0][1][1])
+        assert parsed["enabled"] is False
+        assert parsed["action"] == "timeout"
+
+
 class TestGuildConfig:
     async def test_get_guild_config_returns_defaults(self, mock_db):
         result = await db.get_guild_config(12345, {"key": "default"})
