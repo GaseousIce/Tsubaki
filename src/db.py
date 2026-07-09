@@ -35,27 +35,31 @@ async def migrate() -> None:
         "added_at TEXT NOT NULL DEFAULT (datetime('now')), "
         "source TEXT NOT NULL)"
     )
-    await db.execute(
-        "CREATE TABLE IF NOT EXISTS typosquat_patterns ("
-        "pattern TEXT PRIMARY KEY, "
-        "added_at TEXT NOT NULL DEFAULT (datetime('now')))"
-    )
 
 
-# --- Guild configs ---
+DEFAULT_GUILD_CONFIG = {
+    "enabled": True,
+    "action": "timeout",
+    "timeout_duration": 604800,
+    "alert_channels": [],
+    "mod_roles": [],
+    "dm_message": None,
+    "bypass_role": 0,
+}
 
 
-async def get_guild_config(guild_id: int, default: dict) -> dict:
+async def get_guild_config(guild_id: int, default: dict | None = None) -> dict:
     db = await get_db()
     rows = await db.execute(
         "SELECT config FROM guild_configs WHERE guild_id = ?",
         (str(guild_id),),
     )
+    base_default = default if default is not None else DEFAULT_GUILD_CONFIG
     if rows.rows:
-        merged = default.copy()
+        merged = base_default.copy()
         merged.update(json.loads(rows.rows[0][0]))
         return merged
-    return default.copy()
+    return base_default.copy()
 
 
 async def set_guild_config(guild_id: int, config: dict) -> None:
@@ -65,6 +69,13 @@ async def set_guild_config(guild_id: int, config: dict) -> None:
         "ON CONFLICT(guild_id) DO UPDATE SET config = excluded.config",
         (str(guild_id), json.dumps(config)),
     )
+
+
+async def update_guild_config(guild_id: int, **kwargs) -> dict:
+    cfg = await get_guild_config(guild_id)
+    cfg.update(kwargs)
+    await set_guild_config(guild_id, cfg)
+    return cfg
 
 
 # --- Detection log / stats ---
@@ -139,31 +150,5 @@ async def remove_from_blocklist(domain: str) -> bool:
     result = await db.execute(
         "DELETE FROM custom_blocklist WHERE domain = ?",
         (domain,),
-    )
-    return bool(result.rows_affected)
-
-
-# --- Typosquat patterns ---
-
-
-async def get_patterns() -> list[str]:
-    db = await get_db()
-    rows = await db.execute("SELECT pattern FROM typosquat_patterns ORDER BY pattern")
-    return [r[0] for r in rows.rows]
-
-
-async def add_pattern(pattern: str) -> None:
-    db = await get_db()
-    await db.execute(
-        "INSERT OR IGNORE INTO typosquat_patterns (pattern) VALUES (?)",
-        (pattern,),
-    )
-
-
-async def remove_pattern(pattern: str) -> bool:
-    db = await get_db()
-    result = await db.execute(
-        "DELETE FROM typosquat_patterns WHERE pattern = ?",
-        (pattern,),
     )
     return bool(result.rows_affected)

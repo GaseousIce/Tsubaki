@@ -185,6 +185,4 @@ class TestRealFetchBlacklist:
 
     async def test_fetch_real_blacklist_contains_discord_phishing(self):
         result = await domain.fetch_blacklist(retries=1)
-        assert any("discord" in d for d in result), (
-            "Expected at least one 'discord' phishing domain in real filterlist"
-        )
+        assert any("discord" in d for d in result), "Expected at least one 'discord' phishing domain in real filterlist"

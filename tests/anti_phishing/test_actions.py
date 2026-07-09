@@ -317,9 +317,7 @@ class TestPhishingAlertViewCallbacks:
         await view.allow_callback(interaction)
 
         interaction.message.edit.assert_not_called()
-        interaction.followup.send.assert_awaited_once_with(
-            "❌ URL is not set or unknown.", ephemeral=True
-        )
+        interaction.followup.send.assert_awaited_once_with("❌ URL is not set or unknown.", ephemeral=True)
 
     async def test_interaction_check_non_moderator_rejected(self):
         member = self._make_member()

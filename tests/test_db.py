@@ -36,19 +36,19 @@ class TestGetDb:
 class TestMigrate:
     async def test_migrate_creates_tables(self, mock_db):
         await db.migrate()
-        assert mock_db.execute.call_count >= 4
+        assert mock_db.execute.call_count >= 3
 
     async def test_migrate_idempotent(self, mock_db):
         await db.migrate()
         await db.migrate()
-        assert mock_db.execute.call_count >= 8
+        assert mock_db.execute.call_count >= 6
 
 
 class TestAntiPhishingConfig:
-    async def test_set_guild_cfg_merges_and_persists(self, mock_db):
-        from anti_phishing.config import set_guild_cfg
+    async def test_update_guild_config_merges_and_persists(self, mock_db):
+        from db import update_guild_config
 
-        result = await set_guild_cfg(12345, enabled=False)
+        result = await update_guild_config(12345, enabled=False)
         assert result["enabled"] is False
         assert result["action"] == "timeout"
 
@@ -56,6 +56,7 @@ class TestAntiPhishingConfig:
         assert "INSERT INTO guild_configs" in call_args[0][0]
 
         import json
+
         parsed = json.loads(call_args[0][1][1])
         assert parsed["enabled"] is False
         assert parsed["action"] == "timeout"
@@ -152,24 +153,3 @@ class TestCustomBlocklist:
         mock_db.execute.return_value.rows_affected = 0
         result = await db.remove_from_blocklist("nonexistent.com")
         assert result is False
-
-
-class TestTyposquatPatterns:
-    async def test_get_patterns_empty(self, mock_db):
-        result = await db.get_patterns()
-        assert result == []
-
-    async def test_get_patterns(self, mock_db):
-        mock_db.execute.return_value = make_mock_rows([("discord.com",), ("paypal.com",)])
-        result = await db.get_patterns()
-        assert result == ["discord.com", "paypal.com"]
-
-    async def test_add_pattern(self, mock_db):
-        await db.add_pattern("discord.com")
-        call_args = mock_db.execute.call_args
-        assert "INSERT OR IGNORE INTO typosquat_patterns" in call_args[0][0]
-
-    async def test_remove_pattern(self, mock_db):
-        mock_db.execute.return_value.rows_affected = 1
-        result = await db.remove_pattern("discord.com")
-        assert result is True

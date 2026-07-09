@@ -6,7 +6,6 @@ from discord.ext import commands
 import db
 from anti_phishing import actions, domain, rate_limit
 from anti_phishing.commands import antiphishing
-from anti_phishing.config import get_guild_cfg
 from config import AntiPhishingConfig
 
 logger = logging.getLogger("discord")
@@ -27,7 +26,7 @@ def setup(bot: commands.Bot, config: AntiPhishingConfig) -> None:
 
         # Fetch per-guild config; skip if disabled or DB is down.
         try:
-            guild_cfg = await get_guild_cfg(message.guild.id)
+            guild_cfg = await db.get_guild_config(message.guild.id)
         except Exception as exc:
             logger.warning("DB get_guild_cfg failed in on_message: %s", exc)
             return

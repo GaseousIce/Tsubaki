@@ -4,7 +4,6 @@ import discord
 from discord import app_commands
 
 import db
-from anti_phishing.config import get_guild_cfg, set_guild_cfg
 
 logger = logging.getLogger("discord")
 
@@ -69,7 +68,7 @@ class TimeoutDurationModal(discord.ui.Modal, title="Set Timeout Duration"):
         duration_str = self.duration_input.value.strip()
         secs = _parse_duration(duration_str)
 
-        self.parent_view.cfg = await set_guild_cfg(interaction.guild_id, timeout_duration=secs)
+        self.parent_view.cfg = await db.update_guild_config(interaction.guild_id, timeout_duration=secs)
         embed = _build_settings_embed(interaction.guild, self.parent_view.cfg)
         await interaction.response.edit_message(embed=embed, view=self.parent_view)
         await interaction.followup.send(f"✅ Timeout duration set to **{secs}s** ({duration_str}).", ephemeral=True)
@@ -93,7 +92,7 @@ class CustomDMModal(discord.ui.Modal, title="Set Custom DM Message"):
 
     async def on_submit(self, interaction: discord.Interaction):
         value = self.dm_input.value.strip() or None
-        self.parent_view.cfg = await set_guild_cfg(interaction.guild_id, dm_message=value)
+        self.parent_view.cfg = await db.update_guild_config(interaction.guild_id, dm_message=value)
         embed = _build_settings_embed(interaction.guild, self.parent_view.cfg)
         await interaction.response.edit_message(embed=embed, view=self.parent_view)
         if value:
@@ -172,7 +171,7 @@ class SettingsDashboardView(discord.ui.View):
 
     async def toggle_callback(self, interaction: discord.Interaction):
         new_val = not self.cfg.get("enabled", True)
-        self.cfg = await set_guild_cfg(interaction.guild_id, enabled=new_val)
+        self.cfg = await db.update_guild_config(interaction.guild_id, enabled=new_val)
         embed = _build_settings_embed(interaction.guild, self.cfg)
         self.toggle_btn.label = "Disable Anti-Phishing" if new_val else "Enable Anti-Phishing"
         self.toggle_btn.style = discord.ButtonStyle.danger if new_val else discord.ButtonStyle.success
@@ -180,7 +179,7 @@ class SettingsDashboardView(discord.ui.View):
 
     async def action_callback(self, interaction: discord.Interaction):
         selected_action = self.action_select.values[0]
-        self.cfg = await set_guild_cfg(interaction.guild_id, action=selected_action)
+        self.cfg = await db.update_guild_config(interaction.guild_id, action=selected_action)
 
         for option in self.action_select.options:
             option.default = option.value == selected_action
@@ -240,19 +239,19 @@ class RolesChannelsDashboardView(discord.ui.View):
 
     async def channel_callback(self, interaction: discord.Interaction):
         selected_ids = [ch.id for ch in self.channel_select.values]
-        self.cfg = await set_guild_cfg(interaction.guild_id, alert_channels=selected_ids)
+        self.cfg = await db.update_guild_config(interaction.guild_id, alert_channels=selected_ids)
         embed = _build_settings_embed(interaction.guild, self.cfg)
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def mod_callback(self, interaction: discord.Interaction):
         selected_ids = [r.id for r in self.mod_select.values]
-        self.cfg = await set_guild_cfg(interaction.guild_id, mod_roles=selected_ids)
+        self.cfg = await db.update_guild_config(interaction.guild_id, mod_roles=selected_ids)
         embed = _build_settings_embed(interaction.guild, self.cfg)
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def bypass_callback(self, interaction: discord.Interaction):
         selected_id = self.bypass_select.values[0].id if self.bypass_select.values else 0
-        self.cfg = await set_guild_cfg(interaction.guild_id, bypass_role=selected_id)
+        self.cfg = await db.update_guild_config(interaction.guild_id, bypass_role=selected_id)
         embed = _build_settings_embed(interaction.guild, self.cfg)
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -309,7 +308,7 @@ async def cmd_stats(interaction: discord.Interaction):
 async def cmd_settings(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     try:
-        cfg = await get_guild_cfg(interaction.guild_id)
+        cfg = await db.get_guild_config(interaction.guild_id)
         embed = _build_settings_embed(interaction.guild, cfg)
         view = SettingsDashboardView(interaction.guild_id, cfg)
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)

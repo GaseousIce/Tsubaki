@@ -115,10 +115,7 @@ async def real_official_domains():
 
     fetched = await domain.fetch_blacklist(retries=1)
     if not fetched:
-        raise RuntimeError(
-            "Could not fetch real phishing domains from GitHub — "
-            "check network connectivity"
-        )
+        raise RuntimeError("Could not fetch real phishing domains from GitHub — check network connectivity")
     domain.official.update(fetched)
     _real_domains_cache = list(fetched)
     yield _real_domains_cache

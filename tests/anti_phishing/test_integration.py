@@ -32,7 +32,6 @@ class TestHello:
 
 
 class TestAntiPhishingListener:
-
     async def test_safe_message_no_action(self, simcord_env):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
@@ -157,9 +156,7 @@ class TestAntiPhishingEdgeCases:
 
 
 class TestPhishingPunishment:
-    async def test_blacklist_punishes_and_alerts_once(
-        self, simcord_env, mock_db, real_official_domains
-    ):
+    async def test_blacklist_punishes_and_alerts_once(self, simcord_env, mock_db, real_official_domains):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
         alerts = guild.create_text_channel("alerts")
@@ -181,9 +178,7 @@ class TestPhishingPunishment:
         # Send a blacklisted link — gets deleted, Alice timed out, 1 alert
         await alice.send(channel, f"https://{domain}/steam")
 
-        assert channel.last_message is None or domain not in str(
-            channel.last_message.content or ""
-        )
+        assert channel.last_message is None or domain not in str(channel.last_message.content or "")
         assert alice.member.timed_out_until is not None
         assert len(alerts.history()) == 1
 
@@ -196,9 +191,7 @@ class TestPhishingPunishment:
         # Still exactly 1 alert
         assert len(alerts.history()) == 1
 
-    async def test_rate_limit_punishes_and_alerts_once(
-        self, simcord_env_rate, mock_db, official_domains
-    ):
+    async def test_rate_limit_punishes_and_alerts_once(self, simcord_env_rate, mock_db, official_domains):
         guild = simcord_env_rate.create_guild()
         ch1 = guild.create_text_channel("ch1")
         ch2 = guild.create_text_channel("ch2")
@@ -235,9 +228,7 @@ class TestPhishingPunishment:
 
         assert len(alerts.history()) == 1
 
-    async def test_rate_limit_no_urls_still_punishes(
-        self, simcord_env_rate, mock_db, official_domains
-    ):
+    async def test_rate_limit_no_urls_still_punishes(self, simcord_env_rate, mock_db, official_domains):
         """Same non-URL content in 2+ channels triggers rate limit via content hash."""
         guild = simcord_env_rate.create_guild()
         ch1 = guild.create_text_channel("ch1")
@@ -262,9 +253,7 @@ class TestPhishingPunishment:
         assert alice.member.timed_out_until is not None
         assert len(alerts.history()) == 1
 
-    async def test_rate_limit_add_to_blocklist_retries_on_error(
-        self, simcord_env_rate, mock_db, official_domains
-    ):
+    async def test_rate_limit_add_to_blocklist_retries_on_error(self, simcord_env_rate, mock_db, official_domains):
         """add_to_blocklist failing during rate limit doesn't crash the handler."""
         guild = simcord_env_rate.create_guild()
         ch1 = guild.create_text_channel("ch1")
