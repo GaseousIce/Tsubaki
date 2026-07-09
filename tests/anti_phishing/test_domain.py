@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
 from anti_phishing import domain
 
 
@@ -91,3 +93,98 @@ class TestFindInBlacklists:
         urls = ["https://phishing.xyz"]
         result = await domain.find_in_blacklists(urls)
         assert result[1] == "official_blacklist"
+
+
+class TestFetchBlacklist:
+    async def test_fetch_blacklist_merges_both_lists(self):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = AsyncMock(return_value={"domains": ["phishing.xyz", "evil.com"]})
+
+        mock_session = MagicMock()
+        mock_session.__aenter__.return_value = mock_session
+        mock_session.get.return_value.__aenter__.return_value = mock_resp
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            result = await domain.fetch_blacklist(retries=1)
+
+        assert "phishing.xyz" in result
+        assert "evil.com" in result
+
+    async def test_fetch_blacklist_returns_empty_on_failure(self):
+        mock_session = MagicMock()
+        mock_session.__aenter__.return_value = mock_session
+        mock_session.get.side_effect = Exception("Network error")
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            result = await domain.fetch_blacklist(retries=1)
+
+        assert result == set()
+
+    async def test_fetch_url_dict_response(self):
+        """_fetch_url handles dict response with 'domains' key."""
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = AsyncMock(return_value={"domains": ["evil.com", "phishing.xyz"]})
+
+        mock_session = MagicMock()
+        mock_session.__aenter__.return_value = mock_session
+        mock_session.get.return_value.__aenter__.return_value = mock_resp
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            result = await domain._fetch_url("https://example.com", 1, [5], "Test")
+
+        assert result == {"evil.com", "phishing.xyz"}
+
+    async def test_fetch_url_retries_on_failure(self):
+        """_fetch_url retries after first failure and succeeds on second attempt."""
+        mock_resp = MagicMock()
+        mock_resp.__aenter__.return_value = mock_resp
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = AsyncMock(return_value=["evil.com"])
+
+        mock_session = MagicMock()
+        mock_session.__aenter__.return_value = mock_session
+        mock_session.get.side_effect = [Exception("Timeout"), mock_resp]
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            with patch("asyncio.sleep", AsyncMock()):
+                result = await domain._fetch_url("https://example.com", 2, [5, 10], "Test")
+
+        assert result == {"evil.com"}
+
+
+class TestFetchOfficialBlacklist:
+    async def test_success_updates_domain_official(self):
+        with patch("anti_phishing.domain.fetch_blacklist", return_value={"evil.com", "phishing.xyz"}):
+            from anti_phishing.__init__ import fetch_official_blacklist
+            from config import AntiPhishingConfig
+
+            domain.official.clear()
+            await fetch_official_blacklist(AntiPhishingConfig())
+            assert "evil.com" in domain.official
+            assert "phishing.xyz" in domain.official
+
+    async def test_empty_does_not_update(self):
+        with patch("anti_phishing.domain.fetch_blacklist", return_value=set()):
+            from anti_phishing.__init__ import fetch_official_blacklist
+            from config import AntiPhishingConfig
+
+            domain.official.clear()
+            domain.official.add("existing.com")
+            await fetch_official_blacklist(AntiPhishingConfig())
+            assert domain.official == {"existing.com"}
+
+
+class TestRealFetchBlacklist:
+    """Integration tests that hit the actual GitHub API."""
+
+    async def test_fetch_real_blacklist_returns_domains(self):
+        result = await domain.fetch_blacklist(retries=1)
+        assert len(result) > 0, "Real filterlist fetch returned no domains"
+
+    async def test_fetch_real_blacklist_contains_discord_phishing(self):
+        result = await domain.fetch_blacklist(retries=1)
+        assert any("discord" in d for d in result), (
+            "Expected at least one 'discord' phishing domain in real filterlist"
+        )
