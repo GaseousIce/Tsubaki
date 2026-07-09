@@ -1,6 +1,6 @@
 import logging
 import os
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from threading import Thread
@@ -59,12 +59,7 @@ def start_healthcheck_server() -> None:
         def log_message(self, _format, *_args):
             return
 
-    class SecureHealthcheckServer(ThreadingHTTPServer):
-        def finish_request(self, request, client_address):
-            request.settimeout(5.0)  # 5-second timeout on requests
-            super().finish_request(request, client_address)
-
-    server = SecureHealthcheckServer(("0.0.0.0", port), HealthHandler)
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
     logger.info("Healthcheck server listening on port %s", port)
     server.serve_forever()
 
