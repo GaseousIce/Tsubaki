@@ -33,3 +33,7 @@ build/
 
 # Graphify knowledge graph output
 graphify-out/
+
+# Coverage
+.coverage
+htmlcov/
