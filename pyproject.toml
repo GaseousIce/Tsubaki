@@ -17,6 +17,7 @@ dev = [
     "pytest-asyncio>=0.25",
     "pytest-mock>=3.0",
     "simcord[pytest]>=1.0.0",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.pytest.ini_options]
