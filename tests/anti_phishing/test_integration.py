@@ -324,6 +324,17 @@ class TestAntiPhishingCommands:
         assert "Status" in embed_str
         assert "Enabled" in embed_str
 
+    async def test_configure_command(self, simcord_env, mock_db):
+        guild = simcord_env.create_guild()
+        channel = guild.create_text_channel("general")
+        alice = guild.add_member(simcord_env.create_user("alice"))
+
+        result = await alice.slash(channel, "antiphishing configure", enabled=False, action="kick")
+
+        followup = result.followups[0] if result.followups else None
+        assert followup is not None
+        assert "successfully updated" in followup.content
+
 
 class TestChannelClear:
     async def test_clear_requires_manage_messages(self, simcord_env):

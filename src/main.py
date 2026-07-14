@@ -15,7 +15,7 @@ from anti_phishing import setup as setup_anti_phishing
 from channel_clear import setup as setup_channel_clear
 from config import AppConfig
 from db import migrate
-from groq_service import GroqAskService
+from groq_service import ask_tsubaki, get_groq_client
 
 load_dotenv()
 token = os.getenv("DISCORD_TOKEN")
@@ -81,7 +81,7 @@ async def setup_hook():
     await migrate()  # DB tables must exist before any feature uses them.
 
     try:
-        ai_service = GroqAskService(model=app_config.groq.model)
+        ai_service = get_groq_client()
         logger.info("Groq /ask service initialized")
     except ValueError:
         ai_service = None
@@ -122,7 +122,7 @@ async def ask(interaction: discord.Interaction, question: str):
     await interaction.response.defer(thinking=True)
     try:
         async with interaction.channel.typing():
-            answer = await ai_service.ask(question)
+            answer = await ask_tsubaki(ai_service, question, model=app_config.groq.model)
     except Exception:
         logger.exception("Groq request for /ask failed")
         await interaction.followup.send(
@@ -139,26 +139,18 @@ async def ask(interaction: discord.Interaction, question: str):
 
 @ask.error
 async def ask_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.CommandOnCooldown):
-        try:
+    try:
+        if isinstance(error, app_commands.CommandOnCooldown):
             await interaction.response.send_message(
                 f"H-Hey! Don't spam me! ( ｀皿´) Please wait {error.retry_after:.1f}s before asking again, baka!",
                 ephemeral=True,
             )
-        except discord.HTTPException:
-            pass
-    else:
-        logger.error("Unhandled error in /ask command: %s", error)
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send("An error occurred.", ephemeral=True)
-            else:
-                try:
-                    await interaction.response.send_message("An error occurred.", ephemeral=True)
-                except (discord.InteractionResponded, discord.HTTPException):
-                    await interaction.followup.send("An error occurred.", ephemeral=True)
-        except discord.HTTPException:
-            pass
+        else:
+            logger.error("Unhandled error in /ask command: %s", error)
+            target = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+            await target("An error occurred.", ephemeral=True)
+    except discord.HTTPException:
+        pass
 
 
 bot.run(token, log_handler=handler, log_level=logging.DEBUG)

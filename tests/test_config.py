@@ -58,6 +58,7 @@ model = "test-model"
 
         cfg = AppConfig.load(str(config_path))
         assert cfg.anti_phishing.rate_enabled is True
+        assert cfg.anti_phishing.rate_threshold == 3
         assert cfg.groq.model == "openai/gpt-oss-120b"
 
     def test_load_partial_anti_phishing(self, tmp_path):

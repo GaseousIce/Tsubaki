@@ -1,32 +1,30 @@
 import tomllib
-from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 
-@dataclass
-class AntiPhishingConfig:
-    rate_enabled: bool = True
-    rate_threshold: int = 3
-    rate_window: int = 10
-    fetch_retries: int = 3
+class AntiPhishingConfig(SimpleNamespace):
+    def __init__(self, **kwargs):
+        super().__init__(
+            rate_enabled=kwargs.get("rate_enabled", True),
+            rate_threshold=kwargs.get("rate_threshold", 3),
+            rate_window=kwargs.get("rate_window", 10),
+            fetch_retries=kwargs.get("fetch_retries", 3),
+        )
 
 
-@dataclass
-class GroqConfig:
-    model: str = "openai/gpt-oss-120b"
+class GroqConfig(SimpleNamespace):
+    def __init__(self, **kwargs):
+        super().__init__(
+            model=kwargs.get("model", "openai/gpt-oss-120b"),
+        )
 
 
-@dataclass
 class AppConfig:
-    anti_phishing: AntiPhishingConfig = field(default_factory=AntiPhishingConfig)
-    groq: GroqConfig = field(default_factory=GroqConfig)
+    def __init__(self, data: dict):
+        self.anti_phishing = AntiPhishingConfig(**data.get("anti_phishing", {}))
+        self.groq = GroqConfig(**data.get("groq", {}))
 
     @classmethod
     def load(cls, path: str = "config.toml") -> "AppConfig":
         with open(path, "rb") as f:
-            data = tomllib.load(f)
-        ap = data.get("anti_phishing", {})
-        gq = data.get("groq", {})
-        return cls(
-            anti_phishing=AntiPhishingConfig(**ap),
-            groq=GroqConfig(**gq),
-        )
+            return cls(tomllib.load(f))
