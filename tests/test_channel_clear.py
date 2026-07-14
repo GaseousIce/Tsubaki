@@ -42,3 +42,41 @@ class TestPurgeChannel:
         result = await purge_channel(channel, limit=10, check=check)
         assert result == 1
         channel.purge.assert_awaited_once_with(limit=10, check=check)
+
+
+class TestDailyClearSetup:
+    def test_no_channel_id_skips_loop(self, monkeypatch):
+        """When CLEAR_CHANNEL_ID is unset, setup returns without starting a loop."""
+        monkeypatch.delenv("CLEAR_CHANNEL_ID", raising=False)
+
+        import channel_clear
+
+        bot = MagicMock()
+        # Should not raise — just logs a warning and returns
+        channel_clear.setup(bot)
+
+    def test_invalid_channel_id_skips_loop(self, monkeypatch):
+        """When CLEAR_CHANNEL_ID is not a valid integer, setup returns early."""
+        monkeypatch.setenv("CLEAR_CHANNEL_ID", "not-a-number")
+
+        import channel_clear
+
+        bot = MagicMock()
+        # Should not raise — logs an error and returns
+        channel_clear.setup(bot)
+
+    def test_valid_channel_id_starts_loop(self, monkeypatch):
+        """When CLEAR_CHANNEL_ID is a valid snowflake, the daily loop starts."""
+        monkeypatch.setenv("CLEAR_CHANNEL_ID", "123456789")
+
+        mock_loop_instance = MagicMock()
+
+        from unittest.mock import patch
+
+        import channel_clear
+
+        with patch.object(channel_clear.tasks, "loop", return_value=lambda f: mock_loop_instance):
+            bot = MagicMock()
+            channel_clear.setup(bot)
+
+        mock_loop_instance.start.assert_called_once()
