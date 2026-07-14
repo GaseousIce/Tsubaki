@@ -69,7 +69,7 @@ All commits must follow the **Conventional Commits** specification to ensure a s
 ```
 
 - **Subject**: Write in the present tense, imperative mood (e.g., "add", not "added" or "adds"). Limit the subject line to 75 characters and do not end it with a period.
-- **Body**: Use the body to explain the *what* and *why* of the change (motivation, context, and impact), rather than the *how*. Keep line lengths under 72 characters.
+- **Body**: Use bullet points in the body to explain the *what* and *why* of the change (motivation, context, and impact), rather than the *how*. Keep line lengths under 72 characters.
 - **Breaking Changes**: Indicate breaking changes by placing an `!` after the type/scope, or by adding `BREAKING CHANGE:` at the beginning of a footer.
 
 ### Commit Types
@@ -90,9 +90,8 @@ All commits must follow the **Conventional Commits** specification to ensure a s
   ```git
   feat(groq): introduce configurable Groq system prompt
 
-  Allows guild admins to customize the personality and prompt instructions
-  for the /ask Groq command. Defaults to the standard anime-girl personality
-  if not specified in the guild settings.
+  - Allows guild admins to customize the personality and prompt instructions for the /ask Groq command.
+  - Defaults to the standard anime-girl personality if not specified in the guild settings.
 
   Resolves #42
   ```
