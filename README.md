@@ -10,7 +10,7 @@ Incoming messages are checked before links can spread through a server:
 
 1. Extract URLs from message content and embeds.
 2. Match domains against the official Discord phishing and suspicious-domain lists.
-3. Match against each server's custom blocklist stored in Turso/libSQL.
+3. Match against the global custom blocklist stored in Turso/libSQL and shared by every server using the database.
 4. Scan configured typosquat patterns.
 5. Detect link spam across 3+ unique channels within 10 seconds.
 6. Delete the message, DM the user, log the detection, apply the configured action, and alert configured moderator channels.
