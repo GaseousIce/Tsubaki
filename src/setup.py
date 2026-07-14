@@ -109,7 +109,12 @@ def _build_setup_embed(
 
     enabled = "🟢 Enabled" if cfg.get("enabled", True) else "🔴 Disabled"
     embed.add_field(name="Status", value=enabled, inline=True)
-    embed.add_field(name="Timeout Duration", value=_format_duration(cfg.get("timeout_duration", 604800)), inline=True)
+    if action == "timeout":
+        embed.add_field(
+            name="Timeout Duration",
+            value=_format_duration(cfg.get("timeout_duration", 604800)),
+            inline=True,
+        )
 
     ch_results = _check_alert_channels(guild, cfg.get("alert_channels", []))
     ch_val = "\n".join(r[0] for r in ch_results) if ch_results else "none configured"

@@ -32,7 +32,8 @@ def _build_settings_embed(guild: discord.Guild, cfg: dict) -> discord.Embed:
     embed = discord.Embed(title=f"🛡️ Anti-Phishing Settings — {guild.name}", color=discord.Color.blurple())
     embed.add_field(name="Status", value="🟢 Enabled" if cfg["enabled"] else "🔴 Disabled", inline=True)
     embed.add_field(name="Action", value=cfg["action"].capitalize(), inline=True)
-    embed.add_field(name="Timeout Duration", value=_format_duration(cfg["timeout_duration"]), inline=True)
+    if cfg["action"] == "timeout":
+        embed.add_field(name="Timeout Duration", value=_format_duration(cfg["timeout_duration"]), inline=True)
     embed.add_field(name="Alert Channels", value=alert_chs, inline=False)
     embed.add_field(name="Mod Roles", value=mod_roles, inline=False)
     embed.add_field(name="Bypass Role", value=bypass, inline=False)
@@ -151,11 +152,12 @@ class SettingsDashboardView(discord.ui.View):
         self.action_select.callback = self.action_callback
         self.add_item(self.action_select)
 
-        self.timeout_btn = discord.ui.Button(
-            label="Set Timeout Duration", style=discord.ButtonStyle.secondary, custom_id="set_timeout", row=2
-        )
-        self.timeout_btn.callback = self.timeout_callback
-        self.add_item(self.timeout_btn)
+        if cfg["action"] == "timeout":
+            self.timeout_btn = discord.ui.Button(
+                label="Set Timeout Duration", style=discord.ButtonStyle.secondary, custom_id="set_timeout", row=2
+            )
+            self.timeout_btn.callback = self.timeout_callback
+            self.add_item(self.timeout_btn)
 
         self.dm_btn = discord.ui.Button(
             label="Set Custom DM Message", style=discord.ButtonStyle.secondary, custom_id="set_dm", row=2
@@ -181,11 +183,9 @@ class SettingsDashboardView(discord.ui.View):
         selected_action = self.action_select.values[0]
         self.cfg = await db.update_guild_config(interaction.guild_id, action=selected_action)
 
-        for option in self.action_select.options:
-            option.default = option.value == selected_action
-
         embed = _build_settings_embed(interaction.guild, self.cfg)
-        await interaction.response.edit_message(embed=embed, view=self)
+        view = SettingsDashboardView(self.guild_id, self.cfg)
+        await interaction.response.edit_message(embed=embed, view=view)
 
     async def timeout_callback(self, interaction: discord.Interaction):
         modal = TimeoutDurationModal(self)
