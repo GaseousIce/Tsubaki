@@ -75,7 +75,7 @@ def extract_urls(text: str, embeds=None) -> list[str]:
                 if url_lower not in seen:
                     seen.add(url_lower)
                     result.append(url_lower)
-        except Exception:
+        except AttributeError:
             pass
     return result
 

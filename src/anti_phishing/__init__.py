@@ -70,7 +70,8 @@ def setup(
         # 1. Extract URLs and check blacklists.
         try:
             extracted_urls = domain.extract_urls(message.content, message.embeds)
-        except Exception:
+        except Exception as exc:
+            logger.exception("Failed to extract URLs from message: %s", exc)
             extracted_urls = []
 
         if extracted_urls:
@@ -122,8 +123,18 @@ def setup(
         except Exception as exc:
             await mark_database_unavailable(exc)
 
+    @tasks.loop(hours=1.0)
+    async def prune_rate_limits() -> None:
+        try:
+            rate_limit.prune_stale_entries()
+            logger.info("Auto-pruned stale anti-phishing rate-limit entries")
+        except Exception as exc:
+            logger.warning("Failed to prune stale rate-limit entries: %s", exc)
+
     async def on_ready() -> None:
         nonlocal backfill_complete, recovery_started
+        if not prune_rate_limits.is_running():
+            prune_rate_limits.start()
         if enable_database_recovery and not recovery_started:
             recover_database.start()
             recovery_started = True

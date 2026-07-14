@@ -30,3 +30,18 @@ def rate_limit_check(user_id: int, channel_id: int, content: str, rate_window: i
 
 def clear_user(user_id: int) -> None:
     _tracker.pop(user_id, None)
+
+
+def prune_stale_entries(window_seconds: int = 3600) -> None:
+    """Purge stale rate-limit entries for users who have been inactive."""
+    now = time.time()
+    stale_keys = []
+    for user_id, entries in list(_tracker.items()):
+        active_entries = [entry for entry in entries if now - entry[1] <= window_seconds]
+        if not active_entries:
+            stale_keys.append(user_id)
+        else:
+            _tracker[user_id] = active_entries
+
+    for key in stale_keys:
+        _tracker.pop(key, None)

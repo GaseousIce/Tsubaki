@@ -29,3 +29,21 @@ class TestClearUser:
 
     def test_clear_nonexistent_user_does_not_raise(self):
         rate_limit.clear_user(999)
+
+
+class TestPruneStaleEntries:
+    def test_prune_removes_expired_entries(self):
+        import time
+
+        # Add active entry
+        rate_limit.rate_limit_check(1, 100, "active", 10, 3)
+        # Manually add an expired entry (older than 10 seconds)
+        rate_limit.rate_limit_check(2, 200, "expired", 10, 3)
+        rate_limit._tracker[2] = [(200, time.time() - 20, "expired")]
+
+        # Prune with window_seconds = 10
+        rate_limit.prune_stale_entries(window_seconds=10)
+
+        # User 1 should remain, user 2 should be pruned
+        assert 1 in rate_limit._tracker
+        assert 2 not in rate_limit._tracker
