@@ -62,6 +62,25 @@ async def get_guild_config(guild_id: int, default: dict | None = None) -> dict:
     return base_default.copy()
 
 
+async def get_or_create_guild_config(guild_id: int) -> dict:
+    """Return a guild's config, persisting canonical defaults when it is new."""
+    db = await get_db()
+    rows = await db.execute(
+        "SELECT config FROM guild_configs WHERE guild_id = ?",
+        (str(guild_id),),
+    )
+    if rows.rows:
+        merged = DEFAULT_GUILD_CONFIG.copy()
+        merged.update(json.loads(rows.rows[0][0]))
+        return merged
+
+    await db.execute(
+        "INSERT OR IGNORE INTO guild_configs (guild_id, config) VALUES (?, ?)",
+        (str(guild_id), json.dumps(DEFAULT_GUILD_CONFIG)),
+    )
+    return await get_guild_config(guild_id)
+
+
 async def set_guild_config(guild_id: int, config: dict) -> None:
     db = await get_db()
     await db.execute(
@@ -72,7 +91,7 @@ async def set_guild_config(guild_id: int, config: dict) -> None:
 
 
 async def update_guild_config(guild_id: int, **kwargs) -> dict:
-    cfg = await get_guild_config(guild_id)
+    cfg = await get_or_create_guild_config(guild_id)
     cfg.update(kwargs)
     await set_guild_config(guild_id, cfg)
     return cfg

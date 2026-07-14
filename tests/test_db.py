@@ -83,6 +83,24 @@ class TestGuildConfig:
         assert parsed["enabled"] is True
         assert parsed["action"] == "timeout"
 
+    async def test_get_or_create_guild_config_persists_defaults(self, mock_db):
+        result = await db.get_or_create_guild_config(12345)
+
+        insert_call = mock_db.execute.call_args_list[1]
+        assert "INSERT OR IGNORE INTO guild_configs" in insert_call.args[0]
+        assert json.loads(insert_call.args[1][1]) == db.DEFAULT_GUILD_CONFIG
+        assert result == db.DEFAULT_GUILD_CONFIG
+
+    async def test_get_or_create_guild_config_preserves_stored_values(self, mock_db):
+        stored = json.dumps({"enabled": False, "action": "warn"})
+        mock_db.execute.return_value = make_mock_rows([(stored,)])
+
+        result = await db.get_or_create_guild_config(12345)
+
+        assert result["enabled"] is False
+        assert result["action"] == "warn"
+        assert mock_db.execute.await_count == 1
+
 
 class TestDetectionLog:
     async def test_log_detection(self, mock_db):
