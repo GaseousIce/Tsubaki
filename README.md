@@ -1,79 +1,49 @@
 # Tsubaki
 
-Tsubaki is a high-performance, lightweight Discord auto-moderation bot featuring robust anti-phishing protection, an interactive administration dashboard, channel cleaning tools, and a Groq AI-powered chat command. It is designed to run efficiently on local environments or deploy seamlessly to cloud providers like Render.
-
----
+Tsubaki is a compact Discord auto-moderation bot with anti-phishing, channel cleaning, a setup health check, and an optional Groq-powered `/ask` command. It runs locally with `uv` or as a Render web service with a lightweight `/health` endpoint.
 
 ## Features
 
-### 🛡️ Anti-Phishing & Security Pipeline
+### Anti-phishing
 
-Tsubaki implements a multi-stage security pipeline to detect and mitigate phishing links before they can compromise your community:
+Incoming messages are checked before links can spread through a server:
 
-1. **Domain Extraction**: Scans all incoming message content and message embeds for URLs.
-2. **Blacklist Validation**: Matches extracted domains against:
-   - The community-curated [official phishing links database](https://github.com/nikolaischunk/discord-phishing-links).
-   - A per-server **Custom Blocklist** stored in the database.
-3. **Cross-Channel Rate-Limit Heuristic**: Automatically detects spam/phishing spreads across multiple channels (triggers when a user sends links/content across 3+ unique channels within a 10-second window).
-4. **Automated Punishment Actions**: Servers can configure the pipeline to automatically **Timeout**, **Kick**, **Ban**, or **Warn** offending accounts.
-5. **Interactive Mod Alerts**: Alerts moderators in designated channels with interactive button components:
-   - **Pardon User**: Instantly removes timeouts.
-   - **Ban User**: Escalates the punishment to a permanent ban.
-   - **Allow URL**: Removes the domain from the blocklist if it was flagged in error.
-6. **Compromised Account Security DMs**: Automatically direct-messages the offender with step-by-step account recovery instructions (changing password, enabling 2FA, revoking unauthorized apps, regenerating token).
+1. Extract URLs from message content and embeds.
+2. Match domains against the official Discord phishing and suspicious-domain lists.
+3. Match against each server's custom blocklist stored in Turso/libSQL.
+4. Scan configured typosquat patterns.
+5. Detect link spam across 3+ unique channels within 10 seconds.
+6. Delete the message, DM the user, log the detection, apply the configured action, and alert configured moderator channels.
 
-### 🤖 Groq AI Assistant (`/ask`)
+Supported actions are `timeout`, `kick`, `ban`, and `warn`. Defaults are enabled anti-phishing, a 7-day timeout, no alert channels, no mod roles, no bypass role, and the built-in recovery DM.
 
-- Integrates Groq's high-speed LLM SDK to answer user questions using an anime-girl persona.
-- Respects a global **5-second cooldown** per user to prevent API quota exhaustion.
-- Gracefully disables itself if no API key is configured.
+### Slash commands
 
-### 🧹 Channel Purging & Maintenance (`/clear`)
+| Command | Permission | Description |
+| :-- | :-- | :-- |
+| `/hello` | None | Say hello to Tsubaki. |
+| `/ping` | None | Check bot latency. |
+| `/ask <question>` | None | Ask Groq with a 1 request / 5 second per-user cooldown. Disabled when `GROQ_API_KEY` is missing. |
+| `/clear [limit] [user] [bots_only]` | Manage Messages | Delete messages in the current channel with optional filters. |
+| `/setup` | Administrator | Run database, blacklist, role, permission, action, and alert-channel checks. |
+| `/antiphishing settings` | Administrator | Show the current anti-phishing configuration. |
+| `/antiphishing configure` | Administrator | Update anti-phishing options. |
+| `/antiphishing stats` | Administrator | Show detection totals, top blocked domains, and the latest detection. |
 
-- Clean channel history with customizable filters:
-  - **Limit**: Specific number of messages to delete.
-  - **User**: Only clear messages sent by a particular member.
-  - **Bots Only**: Only clear messages sent by bots.
-- **Daily Automated Purge**: Clears a specified channel daily at 3:00 AM if `CLEAR_CHANNEL_ID` is set in the environment.
+### Optional automation
 
----
+- Set `CLEAR_CHANNEL_ID` to purge that channel every day at 3:00 AM.
+- Set `PORT` to start the HTTP healthcheck server on `/` and `/health` for Render.
+- Set `GROQ_MODEL` to override the model in `config.toml` for `/ask`.
 
-## Slash Commands
+## Requirements
 
-| Command                             | Permissions       | Description                                               |
-| :---------------------------------- | :---------------- | :-------------------------------------------------------- |
-| `/hello`                            | None              | Say hello to Tsubaki.                                     |
-| `/ping`                             | None              | Verify bot latency and status.                            |
-| `/ask <question>`                   | None              | Ask Tsubaki anything (cooldown: 1 request per 5 seconds). |
-| `/clear [limit] [user] [bots_only]` | `Manage Messages` | Purge messages with optional filters.                     |
-| `/antiphishing settings`            | `Administrator`   | Open the interactive settings dashboard.                  |
-| `/antiphishing stats`               | `Administrator`   | View server-specific phishing detection metrics and logs. |
+- Python 3.12+
+- [`uv`](https://docs.astral.sh/uv/)
+- A Discord application with **Server Members Intent** and **Message Content Intent** enabled
+- Turso/libSQL database URL and auth token
 
----
-
-## Technical Stack
-
-- **Runtime**: [Python 3.12+](https://www.python.org/)
-- **Framework**: [discord.py](https://discordpy.readthedocs.io) (v2.7+)
-- **Database**: [Turso](https://turso.tech/) / [libSQL](https://github.com/tursodatabase/libsql) (SQLite-compatible edge database)
-- **AI Core**: [Groq Python SDK](https://github.com/groq/groq-python)
-- **Package Manager**: [uv](https://docs.astral.sh/uv/) (Astral)
-- **Linter & Formatter**: [Ruff](https://docs.astral.sh/ruff/) (120 character width, double quotes, 4-space indent)
-- **Testing**: [pytest](https://docs.pytest.org/), [pytest-asyncio](https://github.com/pytest-dev/pytest-asyncio), and [simcord](https://simcord.readthedocs.io/en/latest/) (Discord integration testing library)
-
----
-
-## Setup & Local Running
-
-### 1. Prerequisites
-
-- A Discord Developer Application with **Server Members** and **Message Content** privileged intents enabled.
-- A Turso Database (or local SQLite file) and Auth Token.
-- An Astral `uv` installation.
-
-### 2. Installation
-
-Clone the repository and initialize the environment:
+## Setup
 
 ```bash
 git clone https://github.com/GaseousIce/Tsubaki.git
@@ -81,97 +51,67 @@ cd Tsubaki
 cp .env.example .env
 ```
 
-### 3. Configuration
-
-Configure the `.env` file with your credentials:
+Edit `.env`:
 
 ```env
-# Required Credentials
-DISCORD_TOKEN=your_discord_bot_token_here
-TURSO_DATABASE_URL=your_turso_db_url_here
-TURSO_AUTH_TOKEN=your_turso_auth_token_here
+DISCORD_TOKEN=your_discord_bot_token
+TURSO_DATABASE_URL=libsql://your-db.turso.io
+TURSO_AUTH_TOKEN=your-token
 
-# Optional Features
-GROQ_API_KEY=your_groq_api_key_here
-CLEAR_CHANNEL_ID=your_daily_clear_channel_id_here
+# Optional
+GROQ_API_KEY=your-groq-key
+GROQ_MODEL=openai/gpt-oss-120b
+CLEAR_CHANNEL_ID=123456789012345678
 PORT=10000
 ```
 
-- _Note: Missing Turso credentials will cause the bot to raise a `ValueError` on startup. A missing Groq key will disable `/ask` gracefully._
+`DISCORD_TOKEN`, `TURSO_DATABASE_URL`, and `TURSO_AUTH_TOKEN` are required. Missing Turso values fail startup; missing `GROQ_API_KEY` only disables `/ask`.
 
-### 4. Run the Bot
-
-Tsubaki handles migrations and blacklist fetching automatically on startup.
+## Run
 
 ```bash
 uv run python src/main.py
 ```
 
----
+On startup Tsubaki runs database migrations, loads the official phishing lists, registers slash commands, and syncs the command tree with Discord.
 
-## Development, Quality, and Testing
-
-Tsubaki uses `ruff` for code style validation and formatting, and `pytest` alongside `simcord` for full integration coverage.
-
-### Code Style (Linter & Formatter)
+## Development
 
 ```bash
-# Check code style and rules
 uv run ruff check src/ tests/
-
-# Automatically apply safe fixes
-uv run ruff check --fix src/ tests/
-
-# Format code
 uv run ruff format src/ tests/
-```
-
-### Testing Suite
-
-```bash
-# Run all unit and integration tests
+uv run ruff check --fix src/ tests/
 uv run pytest tests/ -q
-
-# Run anti-phishing tests only
 uv run pytest tests/anti_phishing/ -q
 ```
 
----
+Ruff uses a 120-character line length, double quotes, 4-space indents, and E/F/I lint rules.
 
-## Project Structure
+## Project structure
 
-```
+```text
 Tsubaki/
-├── .agents/             # Agent guidelines and customization workspace
-├── logs/                # Local log folder (logs.log rotates at 5 MB, keeps 3 backups)
 ├── src/
-│   ├── main.py          # Application entrypoint and healthcheck HTTP daemon
-│   ├── config.py        # Settings loader parsing config.toml
-│   ├── db.py            # Turso client interface, migrations, and CRUD
-│   ├── groq_service.py  # Groq API client interface with anime persona prompt
-│   ├── channel_clear.py # Channel purge logic and daily 3:00 AM Cron task
-│   └── anti_phishing/   # Core anti-phishing module
-│       ├── __init__.py  # Pipeline routing & event listener setup
-│       ├── actions.py   # Punishments, mod alerts, and user DM builders
-│       ├── commands.py  # Settings dashboard GUI & stats slash commands
-│       ├── domain.py    # URL extractor & blacklists (community + custom)
-│       └── rate_limit.py# In-memory user cross-channel rate-limit tracker
-├── tests/               # Pytest test suites and SimCord mock clients
-├── config.toml          # Default configuration parameters (fetch retries, thresholds, LLM model)
-├── pyproject.toml       # Project metadata and dependencies declaration
-├── render.yaml          # Infrastructure-as-code for Render Blueprint deployments
-└── ruff.toml            # Ruff linter specifications
+│   ├── main.py              # Entrypoint, bot setup, /hello, /ping, /ask, healthcheck
+│   ├── setup.py             # /setup health and permissions check
+│   ├── channel_clear.py     # /clear and optional daily purge
+│   ├── config.py            # config.toml loader
+│   ├── db.py                # Turso/libSQL client, migrations, CRUD helpers
+│   ├── groq_service.py      # Groq /ask client wrapper
+│   └── anti_phishing/       # Detection pipeline, commands, actions, domain checks
+├── tests/                   # Pytest and SimCord tests
+├── config.toml              # Anti-phishing and Groq defaults
+├── render.yaml              # Render web service blueprint
+├── ruff.toml                # Ruff configuration
+└── pyproject.toml           # Project metadata and dependencies
 ```
 
----
+## Render deployment
 
-## Deploying to Render (Free Web Service)
+1. Push your fork to GitHub.
+2. Create a Render Blueprint from `render.yaml`.
+3. Add `DISCORD_TOKEN`, `TURSO_DATABASE_URL`, and `TURSO_AUTH_TOKEN`.
+4. Optionally add `GROQ_API_KEY`, `GROQ_MODEL`, and `CLEAR_CHANNEL_ID`.
+5. Deploy.
 
-Tsubaki includes a `render.yaml` configuration to allow quick deployments on Render:
-
-1. Push your repository fork to GitHub.
-2. In the Render Dashboard, go to **Blueprints** and connect this repository.
-3. Supply the environment variables in the dashboard: `DISCORD_TOKEN`, `TURSO_DATABASE_URL`, and `TURSO_AUTH_TOKEN`. Optionally supply `GROQ_API_KEY` and `CLEAR_CHANNEL_ID`.
-4. Deploy the blueprint.
-
-Because free-tier web services on Render require binding to a port and responding to HTTP requests, Tsubaki starts a lightweight `/health` check server in a background daemon thread listening on port `$PORT` (defaulting to 10000) to keep the service healthy. File-based logs on Render are ephemeral; utilize the Render console logs for live monitoring.
+Render uses `/health` as the healthcheck path. File logs in `logs/logs.log` are local/ephemeral on Render, so use Render logs for live debugging.
