@@ -1,7 +1,8 @@
 import logging
 
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands as discord_commands
+from discord.ext import tasks
 
 import db
 from anti_phishing import actions, domain, rate_limit
@@ -10,14 +11,14 @@ from anti_phishing.commands import antiphishing
 logger = logging.getLogger("discord")
 
 
-async def backfill_guild_configs(bot: commands.Bot) -> None:
+async def backfill_guild_configs(bot: discord_commands.Bot) -> None:
     """Persist the canonical default config for every guild the bot can see."""
     for guild in bot.guilds:
         await db.get_or_create_guild_config(guild.id)
 
 
 def setup(
-    bot: commands.Bot,
+    bot: discord_commands.Bot,
     config: dict,
     database_available: bool = True,
     enable_database_recovery: bool = False,
