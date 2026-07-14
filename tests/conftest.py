@@ -78,6 +78,10 @@ def _build_bot(config: AntiPhishingConfig) -> commands.Bot:
 
     setup_channel_clear(bot)
 
+    from setup import setup as setup_setup
+
+    setup_setup(bot)
+
     async def setup_hook():
         await bot.tree.sync()
 

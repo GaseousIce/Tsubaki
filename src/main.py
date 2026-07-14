@@ -16,6 +16,7 @@ from channel_clear import setup as setup_channel_clear
 from config import AppConfig
 from db import migrate
 from groq_service import ask_tsubaki, get_groq_client
+from setup import setup as setup_setup
 
 load_dotenv()
 token = os.getenv("DISCORD_TOKEN")
@@ -88,6 +89,7 @@ async def setup_hook():
         logger.warning("GROQ_API_KEY missing: /ask command is disabled")
 
     setup_channel_clear(bot)
+    setup_setup(bot)
     setup_anti_phishing(bot, app_config.anti_phishing)
     await fetch_official_blacklist(app_config.anti_phishing)
 
