@@ -171,3 +171,55 @@ class TestCustomBlocklist:
         mock_db.execute.return_value.rows_affected = 0
         result = await db.remove_from_blocklist("nonexistent.com")
         assert result is False
+
+
+class TestConfigCache:
+    async def test_cache_hits_on_subsequent_reads(self, mock_db):
+        stored = json.dumps({"enabled": False, "action": "ban"})
+        mock_db.execute.return_value = make_mock_rows([(stored,)])
+
+        # First read - queries database
+        result1 = await db.get_guild_config(12345)
+        assert result1["enabled"] is False
+        assert mock_db.execute.call_count == 1
+
+        # Second read - hits cache (no DB query)
+        result2 = await db.get_guild_config(12345)
+        assert result2["enabled"] is False
+        assert mock_db.execute.call_count == 1
+
+    async def test_cache_updates_on_set(self, mock_db):
+        # Populate cache
+        stored = json.dumps({"enabled": True})
+        mock_db.execute.return_value = make_mock_rows([(stored,)])
+        await db.get_guild_config(12345)
+        assert mock_db.execute.call_count == 1
+
+        # Update config via set_guild_config
+        new_cfg = {"enabled": False, "action": "kick"}
+        await db.set_guild_config(12345, new_cfg)
+        assert mock_db.execute.call_count == 2
+
+        # Subsequent read should hit cache with new config immediately (no DB query)
+        result = await db.get_guild_config(12345)
+        assert result["enabled"] is False
+        assert result["action"] == "kick"
+        assert mock_db.execute.call_count == 2
+
+    async def test_clear_config_cache(self, mock_db):
+        stored = json.dumps({"enabled": False})
+        mock_db.execute.return_value = make_mock_rows([(stored,)])
+
+        await db.get_guild_config(12345)
+        assert mock_db.execute.call_count == 1
+
+        # Hit cache
+        await db.get_guild_config(12345)
+        assert mock_db.execute.call_count == 1
+
+        # Clear cache
+        db.clear_config_cache(12345)
+
+        # Next read should query DB again
+        await db.get_guild_config(12345)
+        assert mock_db.execute.call_count == 2

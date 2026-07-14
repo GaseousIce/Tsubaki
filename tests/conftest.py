@@ -14,6 +14,8 @@ def clean_globals():
     domain.official.clear()
     rate_limit._tracker.clear()
     db_module._client = None
+    if hasattr(db_module, "_config_cache"):
+        db_module._config_cache.clear()
     yield
 
 

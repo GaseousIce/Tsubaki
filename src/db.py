@@ -4,6 +4,15 @@ import os
 from libsql_client import create_client
 
 _client = None
+_config_cache: dict[int, dict] = {}
+
+
+def clear_config_cache(guild_id: int | None = None) -> None:
+    """Clear all or a single guild's cache entry."""
+    if guild_id is None:
+        _config_cache.clear()
+    else:
+        _config_cache.pop(guild_id, None)
 
 
 async def get_db():
@@ -49,6 +58,9 @@ DEFAULT_GUILD_CONFIG = {
 
 
 async def get_guild_config(guild_id: int, default: dict | None = None) -> dict:
+    if default is None and guild_id in _config_cache:
+        return _config_cache[guild_id].copy()
+
     db = await get_db()
     rows = await db.execute(
         "SELECT config FROM guild_configs WHERE guild_id = ?",
@@ -58,12 +70,17 @@ async def get_guild_config(guild_id: int, default: dict | None = None) -> dict:
     if rows.rows:
         merged = base_default.copy()
         merged.update(json.loads(rows.rows[0][0]))
+        if default is None:
+            _config_cache[guild_id] = merged.copy()
         return merged
     return base_default.copy()
 
 
 async def get_or_create_guild_config(guild_id: int) -> dict:
     """Return a guild's config, persisting canonical defaults when it is new."""
+    if guild_id in _config_cache:
+        return _config_cache[guild_id].copy()
+
     db = await get_db()
     rows = await db.execute(
         "SELECT config FROM guild_configs WHERE guild_id = ?",
@@ -72,6 +89,7 @@ async def get_or_create_guild_config(guild_id: int) -> dict:
     if rows.rows:
         merged = DEFAULT_GUILD_CONFIG.copy()
         merged.update(json.loads(rows.rows[0][0]))
+        _config_cache[guild_id] = merged.copy()
         return merged
 
     await db.execute(
@@ -88,6 +106,7 @@ async def set_guild_config(guild_id: int, config: dict) -> None:
         "ON CONFLICT(guild_id) DO UPDATE SET config = excluded.config",
         (str(guild_id), json.dumps(config)),
     )
+    _config_cache[guild_id] = config.copy()
 
 
 async def update_guild_config(guild_id: int, **kwargs) -> dict:
