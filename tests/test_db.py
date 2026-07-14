@@ -36,19 +36,19 @@ class TestGetDb:
 class TestMigrate:
     async def test_migrate_creates_tables(self, mock_db):
         await db.migrate()
-        assert mock_db.execute.call_count >= 4
+        assert mock_db.execute.call_count >= 3
 
     async def test_migrate_idempotent(self, mock_db):
         await db.migrate()
         await db.migrate()
-        assert mock_db.execute.call_count >= 8
+        assert mock_db.execute.call_count >= 6
 
 
 class TestAntiPhishingConfig:
-    async def test_set_guild_cfg_merges_and_persists(self, mock_db):
-        from anti_phishing.config import set_guild_cfg
+    async def test_update_guild_config_merges_and_persists(self, mock_db):
+        from db import update_guild_config
 
-        result = await set_guild_cfg(12345, enabled=False)
+        result = await update_guild_config(12345, enabled=False)
         assert result["enabled"] is False
         assert result["action"] == "timeout"
 
@@ -56,6 +56,7 @@ class TestAntiPhishingConfig:
         assert "INSERT INTO guild_configs" in call_args[0][0]
 
         import json
+
         parsed = json.loads(call_args[0][1][1])
         assert parsed["enabled"] is False
         assert parsed["action"] == "timeout"
@@ -81,6 +82,24 @@ class TestGuildConfig:
         parsed = json.loads(call_args[0][1][1])
         assert parsed["enabled"] is True
         assert parsed["action"] == "timeout"
+
+    async def test_get_or_create_guild_config_persists_defaults(self, mock_db):
+        result = await db.get_or_create_guild_config(12345)
+
+        insert_call = mock_db.execute.call_args_list[1]
+        assert "INSERT OR IGNORE INTO guild_configs" in insert_call.args[0]
+        assert json.loads(insert_call.args[1][1]) == db.DEFAULT_GUILD_CONFIG
+        assert result == db.DEFAULT_GUILD_CONFIG
+
+    async def test_get_or_create_guild_config_preserves_stored_values(self, mock_db):
+        stored = json.dumps({"enabled": False, "action": "warn"})
+        mock_db.execute.return_value = make_mock_rows([(stored,)])
+
+        result = await db.get_or_create_guild_config(12345)
+
+        assert result["enabled"] is False
+        assert result["action"] == "warn"
+        assert mock_db.execute.await_count == 1
 
 
 class TestDetectionLog:
@@ -154,22 +173,53 @@ class TestCustomBlocklist:
         assert result is False
 
 
-class TestTyposquatPatterns:
-    async def test_get_patterns_empty(self, mock_db):
-        result = await db.get_patterns()
-        assert result == []
+class TestConfigCache:
+    async def test_cache_hits_on_subsequent_reads(self, mock_db):
+        stored = json.dumps({"enabled": False, "action": "ban"})
+        mock_db.execute.return_value = make_mock_rows([(stored,)])
 
-    async def test_get_patterns(self, mock_db):
-        mock_db.execute.return_value = make_mock_rows([("discord.com",), ("paypal.com",)])
-        result = await db.get_patterns()
-        assert result == ["discord.com", "paypal.com"]
+        # First read - queries database
+        result1 = await db.get_guild_config(12345)
+        assert result1["enabled"] is False
+        assert mock_db.execute.call_count == 1
 
-    async def test_add_pattern(self, mock_db):
-        await db.add_pattern("discord.com")
-        call_args = mock_db.execute.call_args
-        assert "INSERT OR IGNORE INTO typosquat_patterns" in call_args[0][0]
+        # Second read - hits cache (no DB query)
+        result2 = await db.get_guild_config(12345)
+        assert result2["enabled"] is False
+        assert mock_db.execute.call_count == 1
 
-    async def test_remove_pattern(self, mock_db):
-        mock_db.execute.return_value.rows_affected = 1
-        result = await db.remove_pattern("discord.com")
-        assert result is True
+    async def test_cache_updates_on_set(self, mock_db):
+        # Populate cache
+        stored = json.dumps({"enabled": True})
+        mock_db.execute.return_value = make_mock_rows([(stored,)])
+        await db.get_guild_config(12345)
+        assert mock_db.execute.call_count == 1
+
+        # Update config via set_guild_config
+        new_cfg = {"enabled": False, "action": "kick"}
+        await db.set_guild_config(12345, new_cfg)
+        assert mock_db.execute.call_count == 2
+
+        # Subsequent read should hit cache with new config immediately (no DB query)
+        result = await db.get_guild_config(12345)
+        assert result["enabled"] is False
+        assert result["action"] == "kick"
+        assert mock_db.execute.call_count == 2
+
+    async def test_clear_config_cache(self, mock_db):
+        stored = json.dumps({"enabled": False})
+        mock_db.execute.return_value = make_mock_rows([(stored,)])
+
+        await db.get_guild_config(12345)
+        assert mock_db.execute.call_count == 1
+
+        # Hit cache
+        await db.get_guild_config(12345)
+        assert mock_db.execute.call_count == 1
+
+        # Clear cache
+        db.clear_config_cache(12345)
+
+        # Next read should query DB again
+        await db.get_guild_config(12345)
+        assert mock_db.execute.call_count == 2

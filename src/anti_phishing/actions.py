@@ -28,11 +28,6 @@ def _parse_duration(duration: str) -> int:
         return 604800  # default 7d
 
 
-def _action_past(action: str) -> str:
-    mapping = {"timeout": "timed out", "kick": "kicked", "ban": "banned", "warn": "warned"}
-    return mapping.get(action, f"{action}ed")
-
-
 def _build_dm_embed(
     guild_name: str,
     url: str | None,
@@ -57,9 +52,10 @@ def _build_dm_embed(
         timestamp=discord.utils.utcnow(),
     )
 
+    _past = {"timeout": "timed out", "kick": "kicked", "ban": "banned", "warn": "warned"}.get(action, f"{action}ed")
     embed.add_field(
         name="Action Taken",
-        value=f"To protect the server, your account was automatically **{_action_past(action)}**.",
+        value=f"To protect the server, your account was automatically **{_past}**.",
         inline=False,
     )
 
@@ -129,10 +125,13 @@ class PhishingAlertView(discord.ui.View):
         self.ban_button.callback = self.ban_callback
         self.add_item(self.ban_button)
 
+        # Discord custom_id is capped at 100 characters. To prevent crashes on long URLs,
+        # we omit the full URL and only use the member's ID in the custom_id.
+        # The callback fetches the URL from the in-memory view state (self.url).
         self.allow_button = discord.ui.Button(
             label="Allow URL",
             style=discord.ButtonStyle.success,
-            custom_id=f"phish_allow:{url or 'unknown'}_{member.id}",
+            custom_id=f"phish_allow:{member.id}",
             disabled=(not url),
         )
         self.allow_button.callback = self.allow_callback
@@ -217,6 +216,7 @@ async def handle_detection(
     guild_cfg: dict,
     url: str | None,
     reason: str,
+    persist: bool = True,
 ) -> None:
     guild = message.guild
 
@@ -227,11 +227,12 @@ async def handle_detection(
             logger.warning("User %s not found in guild %s — cannot punish", message.author.id, guild.id)
             return
 
-    # 1. Log to DB.
-    try:
-        await db.log_detection(guild.id, url or "unknown", reason)
-    except Exception as exc:
-        logger.warning("DB log_detection failed: %s", exc)
+    # 1. Log to DB when it is available.
+    if persist:
+        try:
+            await db.log_detection(guild.id, url or "unknown", reason)
+        except Exception as exc:
+            logger.warning("DB log_detection failed: %s", exc)
 
     # 2. Delete message.
     try:

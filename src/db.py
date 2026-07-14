@@ -4,6 +4,15 @@ import os
 from libsql_client import create_client
 
 _client = None
+_config_cache: dict[int, dict] = {}
+
+
+def clear_config_cache(guild_id: int | None = None) -> None:
+    """Clear all or a single guild's cache entry."""
+    if guild_id is None:
+        _config_cache.clear()
+    else:
+        _config_cache.pop(guild_id, None)
 
 
 async def get_db():
@@ -35,27 +44,59 @@ async def migrate() -> None:
         "added_at TEXT NOT NULL DEFAULT (datetime('now')), "
         "source TEXT NOT NULL)"
     )
-    await db.execute(
-        "CREATE TABLE IF NOT EXISTS typosquat_patterns ("
-        "pattern TEXT PRIMARY KEY, "
-        "added_at TEXT NOT NULL DEFAULT (datetime('now')))"
+
+
+DEFAULT_GUILD_CONFIG = {
+    "enabled": True,
+    "action": "timeout",
+    "timeout_duration": 604800,
+    "alert_channels": [],
+    "mod_roles": [],
+    "dm_message": None,
+    "bypass_role": 0,
+}
+
+
+async def get_guild_config(guild_id: int, default: dict | None = None) -> dict:
+    if default is None and guild_id in _config_cache:
+        return _config_cache[guild_id].copy()
+
+    db = await get_db()
+    rows = await db.execute(
+        "SELECT config FROM guild_configs WHERE guild_id = ?",
+        (str(guild_id),),
     )
+    base_default = default if default is not None else DEFAULT_GUILD_CONFIG
+    if rows.rows:
+        merged = base_default.copy()
+        merged.update(json.loads(rows.rows[0][0]))
+        if default is None:
+            _config_cache[guild_id] = merged.copy()
+        return merged
+    return base_default.copy()
 
 
-# --- Guild configs ---
+async def get_or_create_guild_config(guild_id: int) -> dict:
+    """Return a guild's config, persisting canonical defaults when it is new."""
+    if guild_id in _config_cache:
+        return _config_cache[guild_id].copy()
 
-
-async def get_guild_config(guild_id: int, default: dict) -> dict:
     db = await get_db()
     rows = await db.execute(
         "SELECT config FROM guild_configs WHERE guild_id = ?",
         (str(guild_id),),
     )
     if rows.rows:
-        merged = default.copy()
+        merged = DEFAULT_GUILD_CONFIG.copy()
         merged.update(json.loads(rows.rows[0][0]))
+        _config_cache[guild_id] = merged.copy()
         return merged
-    return default.copy()
+
+    await db.execute(
+        "INSERT OR IGNORE INTO guild_configs (guild_id, config) VALUES (?, ?)",
+        (str(guild_id), json.dumps(DEFAULT_GUILD_CONFIG)),
+    )
+    return await get_guild_config(guild_id)
 
 
 async def set_guild_config(guild_id: int, config: dict) -> None:
@@ -65,6 +106,14 @@ async def set_guild_config(guild_id: int, config: dict) -> None:
         "ON CONFLICT(guild_id) DO UPDATE SET config = excluded.config",
         (str(guild_id), json.dumps(config)),
     )
+    _config_cache[guild_id] = config.copy()
+
+
+async def update_guild_config(guild_id: int, **kwargs) -> dict:
+    cfg = await get_or_create_guild_config(guild_id)
+    cfg.update(kwargs)
+    await set_guild_config(guild_id, cfg)
+    return cfg
 
 
 # --- Detection log / stats ---
@@ -139,31 +188,5 @@ async def remove_from_blocklist(domain: str) -> bool:
     result = await db.execute(
         "DELETE FROM custom_blocklist WHERE domain = ?",
         (domain,),
-    )
-    return bool(result.rows_affected)
-
-
-# --- Typosquat patterns ---
-
-
-async def get_patterns() -> list[str]:
-    db = await get_db()
-    rows = await db.execute("SELECT pattern FROM typosquat_patterns ORDER BY pattern")
-    return [r[0] for r in rows.rows]
-
-
-async def add_pattern(pattern: str) -> None:
-    db = await get_db()
-    await db.execute(
-        "INSERT OR IGNORE INTO typosquat_patterns (pattern) VALUES (?)",
-        (pattern,),
-    )
-
-
-async def remove_pattern(pattern: str) -> bool:
-    db = await get_db()
-    result = await db.execute(
-        "DELETE FROM typosquat_patterns WHERE pattern = ?",
-        (pattern,),
     )
     return bool(result.rows_affected)

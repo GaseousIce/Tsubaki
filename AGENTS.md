@@ -54,3 +54,45 @@ Default + `members=True` + `message_content=True` (required for anti-phishing). 
 - `render.yaml` deploys as free web service on Render; healthcheck at `/health` is mandatory.
 - File-based logs on Render are ephemeral. Use Render logs for live monitoring.
 - `.env` is real credentials — never commit or expose.
+
+## Commit Guidelines
+
+All commits must follow the **Conventional Commits** specification to ensure a semantic, clean, and detailed project history.
+
+### Message Format
+```
+<type>(<scope>): <subject>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+- **Subject**: Write in the present tense, imperative mood (e.g., "add", not "added" or "adds"). Limit the subject line to 75 characters and do not end it with a period.
+- **Body**: Use bullet points in the body to explain the *what* and *why* of the change (motivation, context, and impact), rather than the *how*. Keep line lengths under 72 characters.
+- **Breaking Changes**: Indicate breaking changes by placing an `!` after the type/scope, or by adding `BREAKING CHANGE:` at the beginning of a footer.
+
+### Commit Types
+- `feat` — A new feature or slash command.
+- `fix` — A bug fix.
+- `docs` — Documentation changes (e.g., editing `AGENTS.md` or code docstrings).
+- `style` — Code style, formatting, semicolon fixes (no logic changes).
+- `refactor` — Code changes that neither fix a bug nor add a feature.
+- `perf` — Code changes that improve performance.
+- `test` — Adding, updating, or correcting tests (e.g., pytest/SimCord).
+- `chore` — Maintenance, configuration, and dependencies.
+- `ci` / `build` — CI/CD workflows, build scripts, or deployment config (e.g., `render.yaml`).
+
+### Examples
+- **Simple**: `docs: add conventional commits guidelines to AGENTS.md`
+- **With Scope**: `feat(anti_phishing): add rate-limit heuristic for spam links`
+- **Detailed**:
+  ```git
+  feat(groq): introduce configurable Groq system prompt
+
+  - Allows guild admins to customize the personality and prompt instructions for the /ask Groq command.
+  - Defaults to the standard anime-girl personality if not specified in the guild settings.
+
+  Resolves #42
+  ```
+

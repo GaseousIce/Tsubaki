@@ -16,7 +16,10 @@ async def purge_channel(
     check=None,
 ) -> int | None:
     try:
-        deleted = await channel.purge(limit=limit, check=check)
+        kwargs = {"limit": limit}
+        if check is not None:
+            kwargs["check"] = check
+        deleted = await channel.purge(**kwargs)
         count = len(deleted)
         logger.info("Cleared %d messages in channel %s %s", count, channel.id, ctx_info)
         return count
@@ -57,7 +60,7 @@ def setup(bot):
             interaction.channel,
             ctx_info=f"by {interaction.user}",
             limit=limit,
-            check=purge_check if (user is not None or bots_only is not None) else lambda m: True,
+            check=purge_check if (user is not None or bots_only is not None) else None,
         )
 
         if count is not None:

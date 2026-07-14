@@ -158,21 +158,19 @@ class TestFetchOfficialBlacklist:
     async def test_success_updates_domain_official(self):
         with patch("anti_phishing.domain.fetch_blacklist", return_value={"evil.com", "phishing.xyz"}):
             from anti_phishing.__init__ import fetch_official_blacklist
-            from config import AntiPhishingConfig
 
             domain.official.clear()
-            await fetch_official_blacklist(AntiPhishingConfig())
+            await fetch_official_blacklist({})
             assert "evil.com" in domain.official
             assert "phishing.xyz" in domain.official
 
     async def test_empty_does_not_update(self):
         with patch("anti_phishing.domain.fetch_blacklist", return_value=set()):
             from anti_phishing.__init__ import fetch_official_blacklist
-            from config import AntiPhishingConfig
 
             domain.official.clear()
             domain.official.add("existing.com")
-            await fetch_official_blacklist(AntiPhishingConfig())
+            await fetch_official_blacklist({})
             assert domain.official == {"existing.com"}
 
 
@@ -185,6 +183,4 @@ class TestRealFetchBlacklist:
 
     async def test_fetch_real_blacklist_contains_discord_phishing(self):
         result = await domain.fetch_blacklist(retries=1)
-        assert any("discord" in d for d in result), (
-            "Expected at least one 'discord' phishing domain in real filterlist"
-        )
+        assert any("discord" in d for d in result), "Expected at least one 'discord' phishing domain in real filterlist"

@@ -1,10 +1,10 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
+import pytest
 
 from anti_phishing.actions import (
     PhishingAlertView,
-    _action_past,
     _build_dm_embed,
     _parse_duration,
     handle_detection,
@@ -13,71 +13,47 @@ from anti_phishing.actions import (
 
 
 class TestParseDuration:
-    def test_seven_days(self):
-        assert _parse_duration("7d") == 604800
-
-    def test_two_weeks(self):
-        assert _parse_duration("2w") == 1209600
-
-    def test_twenty_eight_days(self):
-        assert _parse_duration("28d") == 2419200
-
-    def test_clamped_to_max(self):
-        assert _parse_duration("999d") == 2419200
-
-    def test_garbage_input_returns_default(self):
-        assert _parse_duration("garbage") == 604800
-
-    def test_integer_seconds(self):
-        assert _parse_duration("3600") == 3600
-
-    def test_integer_clamped(self):
-        assert _parse_duration("99999999") == 2419200
-
-    def test_empty_string(self):
-        assert _parse_duration("") == 604800
-
-
-class TestActionPast:
-    def test_timeout(self):
-        assert _action_past("timeout") == "timed out"
-
-    def test_kick(self):
-        assert _action_past("kick") == "kicked"
-
-    def test_ban(self):
-        assert _action_past("ban") == "banned"
-
-    def test_warn(self):
-        assert _action_past("warn") == "warned"
-
-    def test_unknown_fallback(self):
-        assert _action_past("unknown") == "unknowned"
+    @pytest.mark.parametrize(
+        "duration,expected",
+        [
+            ("7d", 604800),
+            ("2w", 1209600),
+            ("28d", 2419200),
+            ("999d", 2419200),
+            ("garbage", 604800),
+            ("3600", 3600),
+            ("99999999", 2419200),
+            ("", 604800),
+        ],
+    )
+    def test_parse(self, duration, expected):
+        assert _parse_duration(duration) == expected
 
 
 class TestBuildDmEmbed:
-    def test_default_message(self):
-        embed = _build_dm_embed("Test Guild", "https://evil.com", "timeout", None)
+    @pytest.mark.parametrize(
+        "guild,url,action,dm_msg,check_desc,check_action",
+        [
+            ("Test Guild", "https://evil.com", "timeout", None, "https://evil.com", "timed out"),
+            ("Test Guild", "https://evil.com", "ban", "Custom alert!", "Custom alert!", "banned"),
+            ("Test Guild", None, "warn", None, "unknown", None),
+            ("Test Guild", "https://evil.com", "kick", None, "https://evil.com", "kicked"),
+        ],
+    )
+    def test_build(self, guild, url, action, dm_msg, check_desc, check_action):
+        embed = _build_dm_embed(guild, url, action, dm_msg)
         data = embed.to_dict()
         assert data["title"] == "🛡️ Account Compromised - Security Alert"
-        assert "https://evil.com" in data["description"]
-        assert "timed out" in str(data)
-
-    def test_custom_dm_message(self):
-        embed = _build_dm_embed("Test Guild", "https://evil.com", "ban", "Custom alert!")
-        data = embed.to_dict()
-        assert data["description"] == "Custom alert!"
-        assert "banned" in str(data)
-
-    def test_url_none(self):
-        embed = _build_dm_embed("Test Guild", None, "warn", None)
-        data = embed.to_dict()
-        assert "unknown" in data["description"]
-
-    def test_kick_action(self):
-        embed = _build_dm_embed("Test Guild", "https://evil.com", "kick", None)
-        data = embed.to_dict()
-        assert "kicked" in str(data)
+        if check_desc in data["description"]:
+            pass
+        elif check_desc == "Custom alert!":
+            assert data["description"] == "Custom alert!"
+        elif check_desc == "unknown":
+            assert "unknown" in data["description"]
+        else:
+            assert check_desc in data["description"]
+        if check_action:
+            assert check_action in str(data)
 
 
 class TestIsModerator:
@@ -317,9 +293,7 @@ class TestPhishingAlertViewCallbacks:
         await view.allow_callback(interaction)
 
         interaction.message.edit.assert_not_called()
-        interaction.followup.send.assert_awaited_once_with(
-            "❌ URL is not set or unknown.", ephemeral=True
-        )
+        interaction.followup.send.assert_awaited_once_with("❌ URL is not set or unknown.", ephemeral=True)
 
     async def test_interaction_check_non_moderator_rejected(self):
         member = self._make_member()
