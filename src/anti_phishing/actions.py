@@ -125,10 +125,13 @@ class PhishingAlertView(discord.ui.View):
         self.ban_button.callback = self.ban_callback
         self.add_item(self.ban_button)
 
+        # Discord custom_id is capped at 100 characters. To prevent crashes on long URLs,
+        # we omit the full URL and only use the member's ID in the custom_id.
+        # The callback fetches the URL from the in-memory view state (self.url).
         self.allow_button = discord.ui.Button(
             label="Allow URL",
             style=discord.ButtonStyle.success,
-            custom_id=f"phish_allow:{url or 'unknown'}_{member.id}",
+            custom_id=f"phish_allow:{member.id}",
             disabled=(not url),
         )
         self.allow_button.callback = self.allow_callback
