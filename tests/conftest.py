@@ -54,14 +54,11 @@ def _build_bot(config: dict) -> commands.Bot:
     intents.members = True
     intents.message_content = True
     bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
+    bot.ai_service = None
 
-    @bot.tree.command(name="hello", description="Say hello")
-    async def hello(interaction: discord.Interaction):
-        await interaction.response.send_message("hello there! :3")
+    from commands import setup as setup_commands
 
-    @bot.tree.command(name="ping", description="Check if the bot is online")
-    async def ping(interaction: discord.Interaction):
-        await interaction.response.send_message("Pong! 0 ms")
+    setup_commands(bot)
 
     from anti_phishing import setup as setup_anti_phishing
 
@@ -102,12 +99,12 @@ def official_domains():
 
 
 @pytest.fixture
-def simcord_bot(anti_phishing_config):
+async def simcord_bot(anti_phishing_config):
     return _build_bot(anti_phishing_config)
 
 
 @pytest.fixture
-def simcord_bot_rate(anti_phishing_config_rate):
+async def simcord_bot_rate(anti_phishing_config_rate):
     return _build_bot(anti_phishing_config_rate)
 
 
