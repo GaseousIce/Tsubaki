@@ -6,12 +6,11 @@ from discord.ext import commands
 import db
 from anti_phishing import actions, domain, rate_limit
 from anti_phishing.commands import antiphishing
-from config import AntiPhishingConfig
 
 logger = logging.getLogger("discord")
 
 
-def setup(bot: commands.Bot, config: AntiPhishingConfig) -> None:
+def setup(bot: commands.Bot, config: dict) -> None:
     """
     Register the on_message listener and /antiphishing command group.
     Call this from setup_hook() after migrate().
@@ -57,12 +56,12 @@ def setup(bot: commands.Bot, config: AntiPhishingConfig) -> None:
 
         # 2. Rate-limit heuristic.
         if not reason:
-            if config.rate_enabled and rate_limit.rate_limit_check(
+            if config.get("rate_enabled", True) and rate_limit.rate_limit_check(
                 message.author.id,
                 message.channel.id,
                 message.content,
-                config.rate_window,
-                config.rate_threshold,
+                config.get("rate_window", 10),
+                config.get("rate_threshold", 3),
             ):
                 reason = "rate_limit"
                 if extracted_urls:
@@ -87,13 +86,13 @@ def setup(bot: commands.Bot, config: AntiPhishingConfig) -> None:
     logger.info("Anti-phishing setup complete")
 
 
-async def fetch_official_blacklist(config: AntiPhishingConfig) -> None:
+async def fetch_official_blacklist(config: dict) -> None:
     """
     Fetch the official phishing domain list into domain.official.
     Called from setup_hook() after setup().
     On complete failure, posts no embed (callers handle alerting if needed).
     """
-    fetched = await domain.fetch_blacklist(config.fetch_retries)
+    fetched = await domain.fetch_blacklist(config.get("fetch_retries", 3))
     domain.official.update(fetched)
     if fetched:
         logger.info("Loaded %d official phishing domains", len(fetched))

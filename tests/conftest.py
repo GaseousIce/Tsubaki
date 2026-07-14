@@ -7,19 +7,12 @@ from discord.ext import commands
 
 import db as db_module
 from anti_phishing import domain, rate_limit
-from config import AntiPhishingConfig
-
-# Session-level cache for real fetched domains (repopulated by clean_globals).
-_real_domains_cache: list[str] | None = None
 
 
 @pytest.fixture(autouse=True)
 def clean_globals():
     domain.official.clear()
-    if _real_domains_cache:
-        domain.official.update(_real_domains_cache)
     rate_limit._tracker.clear()
-    rate_limit._last_global_prune = 0.0
     db_module._client = None
     yield
 
@@ -56,7 +49,7 @@ def mock_db_with_blocklist(mock_db):
     yield mock_db
 
 
-def _build_bot(config: AntiPhishingConfig) -> commands.Bot:
+def _build_bot(config: dict) -> commands.Bot:
     intents = discord.Intents.default()
     intents.members = True
     intents.message_content = True
@@ -92,14 +85,12 @@ def _build_bot(config: AntiPhishingConfig) -> commands.Bot:
 
 @pytest.fixture
 def anti_phishing_config():
-    cfg = AntiPhishingConfig()
-    cfg.rate_enabled = False
-    return cfg
+    return {"rate_enabled": False, "rate_threshold": 3, "rate_window": 10, "fetch_retries": 3}
 
 
 @pytest.fixture
 def anti_phishing_config_rate():
-    return AntiPhishingConfig()
+    return {"rate_enabled": True, "rate_threshold": 3, "rate_window": 10, "fetch_retries": 3}
 
 
 @pytest.fixture
@@ -108,21 +99,6 @@ def official_domains():
     domain.official.update(test_domains)
     yield test_domains
     domain.official.clear()
-
-
-@pytest.fixture(scope="session")
-async def real_official_domains():
-    global _real_domains_cache
-    if _real_domains_cache is not None:
-        yield _real_domains_cache
-        return
-
-    fetched = await domain.fetch_blacklist(retries=1)
-    if not fetched:
-        raise RuntimeError("Could not fetch real phishing domains from GitHub — check network connectivity")
-    domain.official.update(fetched)
-    _real_domains_cache = list(fetched)
-    yield _real_domains_cache
 
 
 @pytest.fixture

@@ -43,18 +43,18 @@ class TestAntiPhishingListener:
         assert msg is not None
         assert msg.content == "Hello everyone! How's it going?"
 
-    async def test_phishing_url_deleted(self, simcord_env, mock_db, real_official_domains):
+    async def test_phishing_url_deleted(self, simcord_env, mock_db, official_domains):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
         alice = guild.add_member(simcord_env.create_user("alice"))
 
-        domain = real_official_domains[0]
+        domain = list(official_domains)[0]
         await alice.send(channel, f"Free nitro! https://{domain}/steam")
 
         msg = channel.last_message
         assert msg is None or domain not in (msg.content or "")
 
-    async def test_guild_disabled(self, simcord_env, mock_db, real_official_domains):
+    async def test_guild_disabled(self, simcord_env, mock_db, official_domains):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
         alice = guild.add_member(simcord_env.create_user("alice"))
@@ -68,7 +68,7 @@ class TestAntiPhishingListener:
 
         mock_db.execute.side_effect = side_effect
 
-        domain = real_official_domains[0]
+        domain = next(iter(official_domains))
         await alice.send(channel, f"https://{domain}/steam")
 
         msg = channel.last_message
@@ -77,12 +77,12 @@ class TestAntiPhishingListener:
 
 
 class TestOnMessageExceptionPaths:
-    async def test_extract_urls_failure_skips(self, simcord_env, mock_db, real_official_domains):
+    async def test_extract_urls_failure_skips(self, simcord_env, mock_db, official_domains):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
         alice = guild.add_member(simcord_env.create_user("alice"))
 
-        domain = real_official_domains[0]
+        domain = next(iter(official_domains))
         with patch("anti_phishing.domain.extract_urls", side_effect=Exception("crash")):
             await alice.send(channel, f"https://{domain}/steam")
 
@@ -90,12 +90,12 @@ class TestOnMessageExceptionPaths:
         assert msg is not None
         assert domain in msg.content
 
-    async def test_find_in_blacklists_failure_skips(self, simcord_env, mock_db, real_official_domains):
+    async def test_find_in_blacklists_failure_skips(self, simcord_env, mock_db, official_domains):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
         alice = guild.add_member(simcord_env.create_user("alice"))
 
-        domain = real_official_domains[0]
+        domain = next(iter(official_domains))
         with patch("anti_phishing.domain.find_in_blacklists", side_effect=Exception("crash")):
             await alice.send(channel, f"https://{domain}/steam")
 
@@ -103,12 +103,12 @@ class TestOnMessageExceptionPaths:
         assert msg is not None
         assert domain in msg.content
 
-    async def test_handle_detection_exception_logged(self, simcord_env, mock_db, real_official_domains):
+    async def test_handle_detection_exception_logged(self, simcord_env, mock_db, official_domains):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
         alice = guild.add_member(simcord_env.create_user("alice"))
 
-        domain = real_official_domains[0]
+        domain = next(iter(official_domains))
         with patch("anti_phishing.actions.handle_detection", side_effect=Exception("oops")):
             await alice.send(channel, f"https://{domain}/steam")
 
@@ -118,7 +118,7 @@ class TestOnMessageExceptionPaths:
 
 
 class TestAntiPhishingEdgeCases:
-    async def test_bypass_role_skips_detection(self, simcord_env, mock_db, real_official_domains):
+    async def test_bypass_role_skips_detection(self, simcord_env, mock_db, official_domains):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
         bypass_role = guild.create_role("Bypass")
@@ -133,21 +133,21 @@ class TestAntiPhishingEdgeCases:
 
         mock_db.execute.side_effect = side_effect
 
-        domain = real_official_domains[0]
+        domain = next(iter(official_domains))
         await alice.send(channel, f"https://{domain}/steam")
 
         msg = channel.last_message
         assert msg is not None
         assert domain in msg.content
 
-    async def test_db_failure_skips_gracefully(self, simcord_env, mock_db, real_official_domains):
+    async def test_db_failure_skips_gracefully(self, simcord_env, mock_db, official_domains):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
         alice = guild.add_member(simcord_env.create_user("alice"))
 
         mock_db.execute.side_effect = Exception("DB is down")
 
-        domain = real_official_domains[0]
+        domain = next(iter(official_domains))
         await alice.send(channel, f"https://{domain}/steam")
 
         msg = channel.last_message
@@ -156,7 +156,7 @@ class TestAntiPhishingEdgeCases:
 
 
 class TestPhishingPunishment:
-    async def test_blacklist_punishes_and_alerts_once(self, simcord_env, mock_db, real_official_domains):
+    async def test_blacklist_punishes_and_alerts_once(self, simcord_env, mock_db, official_domains):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
         alerts = guild.create_text_channel("alerts")
@@ -173,7 +173,7 @@ class TestPhishingPunishment:
 
         mock_db.execute.side_effect = side_effect
 
-        domain = real_official_domains[0]
+        domain = next(iter(official_domains))
 
         # Send a blacklisted link — gets deleted, Alice timed out, 1 alert
         await alice.send(channel, f"https://{domain}/steam")

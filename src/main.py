@@ -13,14 +13,14 @@ from dotenv import load_dotenv
 from anti_phishing import fetch_official_blacklist
 from anti_phishing import setup as setup_anti_phishing
 from channel_clear import setup as setup_channel_clear
-from config import AppConfig
+from config import load_config
 from db import migrate
 from groq_service import ask_tsubaki, get_groq_client
 from setup import setup as setup_setup
 
 load_dotenv()
 token = os.getenv("DISCORD_TOKEN")
-app_config = AppConfig.load()
+config = load_config()
 
 if not token:
     raise ValueError("DISCORD_TOKEN is not set")
@@ -90,8 +90,8 @@ async def setup_hook():
 
     setup_channel_clear(bot)
     setup_setup(bot)
-    setup_anti_phishing(bot, app_config.anti_phishing)
-    await fetch_official_blacklist(app_config.anti_phishing)
+    setup_anti_phishing(bot, config["anti_phishing"])
+    await fetch_official_blacklist(config["anti_phishing"])
 
     # Sync slash commands with Discord on startup.
     synced = await bot.tree.sync()
@@ -124,7 +124,7 @@ async def ask(interaction: discord.Interaction, question: str):
     await interaction.response.defer(thinking=True)
     try:
         async with interaction.channel.typing():
-            answer = await ask_tsubaki(ai_service, question, model=app_config.groq.model)
+            answer = await ask_tsubaki(ai_service, question, model=config["groq"]["model"])
     except Exception:
         logger.exception("Groq request for /ask failed")
         await interaction.followup.send(

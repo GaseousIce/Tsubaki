@@ -28,11 +28,6 @@ def _parse_duration(duration: str) -> int:
         return 604800  # default 7d
 
 
-def _action_past(action: str) -> str:
-    mapping = {"timeout": "timed out", "kick": "kicked", "ban": "banned", "warn": "warned"}
-    return mapping.get(action, f"{action}ed")
-
-
 def _build_dm_embed(
     guild_name: str,
     url: str | None,
@@ -57,9 +52,10 @@ def _build_dm_embed(
         timestamp=discord.utils.utcnow(),
     )
 
+    _past = {"timeout": "timed out", "kick": "kicked", "ban": "banned", "warn": "warned"}.get(action, f"{action}ed")
     embed.add_field(
         name="Action Taken",
-        value=f"To protect the server, your account was automatically **{_action_past(action)}**.",
+        value=f"To protect the server, your account was automatically **{_past}**.",
         inline=False,
     )
 
