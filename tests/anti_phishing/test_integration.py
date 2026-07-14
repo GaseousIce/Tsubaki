@@ -140,19 +140,49 @@ class TestAntiPhishingEdgeCases:
         assert msg is not None
         assert domain in msg.content
 
-    async def test_db_failure_skips_gracefully(self, simcord_env, mock_db, official_domains):
+    async def test_db_failure_uses_defaults_for_official_blacklist(
+        self,
+        simcord_env,
+        mock_db,
+        official_domains,
+    ):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
         alice = guild.add_member(simcord_env.create_user("alice"))
+        await _grant_mod_perms(simcord_env, guild)
 
-        mock_db.execute.side_effect = Exception("DB is down")
+        with (
+            patch("anti_phishing.db.get_or_create_guild_config", side_effect=Exception("DB is down")),
+            patch("anti_phishing.db.get_blocklist_source") as get_blocklist_source,
+            patch("anti_phishing.db.add_to_blocklist") as add_to_blocklist,
+            patch("anti_phishing.actions.db.log_detection") as log_detection,
+        ):
+            domain = next(iter(official_domains))
+            await alice.send(channel, f"https://{domain}/steam")
 
-        domain = next(iter(official_domains))
-        await alice.send(channel, f"https://{domain}/steam")
+        assert channel.last_message is None or domain not in (channel.last_message.content or "")
+        assert alice.member.timed_out_until is not None
+        get_blocklist_source.assert_not_awaited()
+        add_to_blocklist.assert_not_awaited()
+        log_detection.assert_not_awaited()
 
-        msg = channel.last_message
-        assert msg is not None
-        assert domain in msg.content
+    async def test_db_failure_rate_limit_uses_defaults(self, simcord_env_rate, mock_db, official_domains):
+        guild = simcord_env_rate.create_guild()
+        channels = [guild.create_text_channel(f"spam-{index}") for index in range(3)]
+        alice = guild.add_member(simcord_env_rate.create_user("alice"))
+        await _grant_mod_perms(simcord_env_rate, guild)
+
+        with (
+            patch("anti_phishing.db.get_or_create_guild_config", side_effect=Exception("DB is down")),
+            patch("anti_phishing.db.add_to_blocklist") as add_to_blocklist,
+            patch("anti_phishing.actions.db.log_detection") as log_detection,
+        ):
+            for index, channel in enumerate(channels):
+                await alice.send(channel, f"https://suspicious.net/{index}")
+
+        assert alice.member.timed_out_until is not None
+        assert add_to_blocklist.await_count == 0
+        assert log_detection.await_count == 0
 
 
 class TestPhishingPunishment:

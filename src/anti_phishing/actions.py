@@ -213,6 +213,7 @@ async def handle_detection(
     guild_cfg: dict,
     url: str | None,
     reason: str,
+    persist: bool = True,
 ) -> None:
     guild = message.guild
 
@@ -223,11 +224,12 @@ async def handle_detection(
             logger.warning("User %s not found in guild %s — cannot punish", message.author.id, guild.id)
             return
 
-    # 1. Log to DB.
-    try:
-        await db.log_detection(guild.id, url or "unknown", reason)
-    except Exception as exc:
-        logger.warning("DB log_detection failed: %s", exc)
+    # 1. Log to DB when it is available.
+    if persist:
+        try:
+            await db.log_detection(guild.id, url or "unknown", reason)
+        except Exception as exc:
+            logger.warning("DB log_detection failed: %s", exc)
 
     # 2. Delete message.
     try:

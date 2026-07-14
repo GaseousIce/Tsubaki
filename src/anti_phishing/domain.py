@@ -93,12 +93,18 @@ def _extract_hostnames(urls: list[str]) -> set[str]:
     return hostnames
 
 
-async def find_in_blacklists(urls: list[str]) -> tuple[str | None, str | None]:
+async def find_in_blacklists(
+    urls: list[str],
+    check_custom_blocklist: bool = True,
+) -> tuple[str | None, str | None]:
     hostnames = _extract_hostnames(urls)
 
     for hostname in hostnames:
         if hostname in official:
             return (hostname, "official_blacklist")
+
+    if not check_custom_blocklist:
+        return (None, None)
 
     for hostname in hostnames:
         try:

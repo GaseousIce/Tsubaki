@@ -153,7 +153,7 @@ def setup(bot):
 
         try:
             db_ok = await _check_db_health()
-            cfg = await db.get_guild_config(interaction.guild_id)
+            cfg = await db.get_or_create_guild_config(interaction.guild_id)
             blacklist_count = len(domain.official)
             embed = _build_setup_embed(interaction.guild, cfg, db_ok, blacklist_count)
             await interaction.followup.send(embed=embed, ephemeral=True)

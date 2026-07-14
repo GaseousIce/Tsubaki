@@ -96,7 +96,7 @@ async def cmd_stats(interaction: discord.Interaction):
 async def cmd_settings(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     try:
-        cfg = await db.get_guild_config(interaction.guild_id)
+        cfg = await db.get_or_create_guild_config(interaction.guild_id)
         embed = _build_settings_embed(interaction.guild, cfg)
         await interaction.followup.send(embed=embed, ephemeral=True)
     except Exception as exc:
