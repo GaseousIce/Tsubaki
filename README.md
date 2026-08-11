@@ -26,8 +26,7 @@ Supported actions are `timeout`, `kick`, `ban`, and `warn`. Defaults are enabled
 | `/ask <question>` | None | Ask Groq with a 1 request / 5 second per-user cooldown. Disabled when `GROQ_API_KEY` is missing. |
 | `/clear [limit] [user] [bots_only]` | Manage Messages | Delete messages in the current channel with optional filters. |
 | `/setup` | Administrator | Run database, blacklist, role, permission, action, and alert-channel checks. |
-| `/antiphishing settings` | Administrator | Show the current anti-phishing configuration. |
-| `/antiphishing configure` | Administrator | Update anti-phishing options. |
+| `/antiphishing settings` | Administrator | Open interactive anti-phishing settings dashboard. |
 | `/antiphishing stats` | Administrator | Show detection totals, top blocked domains, and the latest detection. |
 
 ### Optional automation
@@ -92,7 +91,8 @@ Ruff uses a 120-character line length, double quotes, 4-space indents, and E/F/I
 ```text
 Tsubaki/
 ├── src/
-│   ├── main.py              # Entrypoint, bot setup, /hello, /ping, /ask, healthcheck
+│   ├── main.py              # Entrypoint, bot setup, healthcheck server
+│   ├── commands.py          # /hello, /ping, /ask commands
 │   ├── setup.py             # /setup health and permissions check
 │   ├── channel_clear.py     # /clear and optional daily purge
 │   ├── config.py            # config.toml loader
