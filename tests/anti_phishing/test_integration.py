@@ -54,6 +54,38 @@ class TestAntiPhishingListener:
         msg = channel.last_message
         assert msg is None or domain not in (msg.content or "")
 
+    async def test_phishing_url_logs_full_message_to_alert_channel(self, simcord_env, mock_db, official_domains):
+        """Verify full message text is delivered to the configured alert channel in integration."""
+        # Arrange
+        guild = simcord_env.create_guild()
+        channel = guild.create_text_channel("general")
+        alerts = guild.create_text_channel("alerts")
+        alice = guild.add_member(simcord_env.create_user("alice"))
+        await _grant_mod_perms(simcord_env, guild)
+
+        cfg = json.dumps({"alert_channels": [alerts.id]})
+
+        async def side_effect(sql, params=None):
+            if "SELECT config FROM guild_configs" in sql:
+                return MagicMock(rows=[(cfg,)])
+            return MagicMock(rows=[])
+
+        mock_db.execute.side_effect = side_effect
+
+        domain = list(official_domains)[0]
+        test_message = f"Check this exclusive Nitro deal! https://{domain}/claim"
+
+        # Act
+        await alice.send(channel, test_message)
+
+        # Assert
+        assert len(alerts.history()) == 1
+        alert_msg = alerts.history()[0]
+        assert len(alert_msg.embeds) == 1
+        fields = {f.name: f.value for f in alert_msg.embeds[0].fields}
+        assert "Message Content" in fields
+        assert test_message in fields["Message Content"]
+
     async def test_guild_disabled(self, simcord_env, mock_db, official_domains):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
