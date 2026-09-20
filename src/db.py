@@ -46,6 +46,9 @@ async def migrate() -> None:
         "added_at TEXT NOT NULL DEFAULT (datetime('now')), "
         "source TEXT NOT NULL)"
     )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_detection_log_guild_timestamp ON detection_log (guild_id, timestamp DESC)"
+    )
     table_info = await db.execute("PRAGMA table_info(detection_log)")
     existing_cols = {row[1] for row in table_info.rows} if table_info.rows else set()
     if existing_cols:
