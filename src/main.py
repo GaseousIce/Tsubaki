@@ -111,6 +111,14 @@ async def setup_hook():
 @bot.event
 async def on_ready():
     print(f"{bot.user.name} has connected to Discord!")
+    # Clear any guild-specific commands to prevent duplicates with global commands
+    for guild in bot.guilds:
+        try:
+            bot.tree.clear_commands(guild=guild)
+            await bot.tree.sync(guild=guild)
+            logger.info("Cleared guild-specific commands for %s (%s) to prevent duplicates", guild.name, guild.id)
+        except Exception as exc:
+            logger.debug("Failed to clear guild commands for %s: %s", guild.id, exc)
 
 
 bot.run(token, log_handler=handler, log_level=logging.DEBUG)
