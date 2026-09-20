@@ -41,12 +41,13 @@ class TestMigrate:
         assert any("CREATE TABLE IF NOT EXISTS detection_log" in sql for sql in executed_sqls)
         assert any("CREATE TABLE IF NOT EXISTS custom_blocklist" in sql for sql in executed_sqls)
         assert any("CREATE INDEX IF NOT EXISTS idx_detection_log_guild_timestamp" in sql for sql in executed_sqls)
+        assert any("CREATE INDEX IF NOT EXISTS idx_detection_log_guild_domain" in sql for sql in executed_sqls)
         assert any("PRAGMA table_info(detection_log)" in sql for sql in executed_sqls)
 
     async def test_migrate_idempotent(self, mock_db):
         await db.migrate()
         await db.migrate()
-        assert mock_db.execute.call_count >= 8
+        assert mock_db.execute.call_count >= 10
 
     async def test_migrate_adds_missing_columns(self, mock_db):
         # Simulate an existing table with only the old columns
@@ -55,6 +56,7 @@ class TestMigrate:
             MagicMock(),  # CREATE TABLE detection_log
             MagicMock(),  # CREATE TABLE custom_blocklist
             MagicMock(),  # CREATE INDEX idx_detection_log_guild_timestamp
+            MagicMock(),  # CREATE INDEX idx_detection_log_guild_domain
             make_mock_rows([(0, "id"), (1, "guild_id"), (2, "domain"), (3, "reason"), (4, "timestamp")]),  # PRAGMA
             MagicMock(),  # ALTER TABLE content
             MagicMock(),  # ALTER TABLE attachments

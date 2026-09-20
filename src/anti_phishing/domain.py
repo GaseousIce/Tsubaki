@@ -20,7 +20,7 @@ _SUSPICIOUS_LIST_URL = (
     "https://raw.githubusercontent.com/nikolaischunk/discord-phishing-links/refs/heads/main/suspicious-list.json"
 )
 
-_URL_RE = re.compile(r"https?://(?:[-\w.]|(?:/[\w\-./~%!#$&'()*+,;=:?@]))+")
+_URL_RE = re.compile(r"https?://[^\s<>\"'()]+")
 
 
 async def _fetch_url(url: str, retries: int, delays: list[int], label: str) -> set[str]:
@@ -94,7 +94,7 @@ def extract_urls(
     result: list[str] = []
     for url in raw:
         try:
-            url_clean = url.strip().rstrip("/")
+            url_clean = url.strip().rstrip("/.,;!?:")
             if url_clean:
                 url_lower = url_clean.lower()
                 if url_lower not in seen:
@@ -118,6 +118,12 @@ def _extract_hostnames(urls: list[str]) -> set[str]:
     return hostnames
 
 
+def _domain_candidates(hostname: str) -> list[str]:
+    """Return all domain suffix candidates for subdomain matching (e.g. sub.evil.com -> [sub.evil.com, evil.com])."""
+    parts = hostname.split(".")
+    return [".".join(parts[i:]) for i in range(len(parts) - 1)]
+
+
 async def find_in_blacklists(
     urls: list[str],
     check_custom_blocklist: bool = True,
@@ -125,19 +131,21 @@ async def find_in_blacklists(
     hostnames = _extract_hostnames(urls)
 
     for hostname in hostnames:
-        if hostname in official:
-            return (hostname, "official_blacklist")
+        for candidate in _domain_candidates(hostname):
+            if candidate in official:
+                return (hostname, "official_blacklist")
 
     if not check_custom_blocklist:
         return (None, None)
 
     for hostname in hostnames:
-        try:
-            source = await db.get_blocklist_source(hostname)
-            if source:
-                return (hostname, f"custom_blocklist ({source})")
-        except Exception as exc:
-            logger.warning("DB blocklist check failed for %s: %s", hostname, exc)
+        for candidate in _domain_candidates(hostname):
+            try:
+                source = await db.get_blocklist_source(candidate)
+                if source:
+                    return (hostname, f"custom_blocklist ({source})")
+            except Exception as exc:
+                logger.warning("DB blocklist check failed for %s: %s", candidate, exc)
 
     for url in urls:
         try:

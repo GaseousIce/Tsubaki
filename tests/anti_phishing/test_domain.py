@@ -36,6 +36,17 @@ class TestExtractUrls:
     def test_no_urls(self):
         assert domain.extract_urls("just some text without urls") == []
 
+    def test_extract_urls_with_query_ports_and_anchors(self):
+        text = "Visit https://evil.com:8443/login?token=secret#dashboard today"
+        result = domain.extract_urls(text)
+        assert len(result) == 1
+        assert result[0] == "https://evil.com:8443/login?token=secret#dashboard"
+
+    def test_extract_urls_strips_trailing_sentence_punctuation(self):
+        text = "Check out https://evil.com/page. And http://test.org/claim!"
+        result = domain.extract_urls(text)
+        assert result == ["https://evil.com/page", "http://test.org/claim"]
+
     def test_url_from_embed_url(self):
         class FakeEmbed:
             url = "https://embed.com/link"
@@ -125,6 +136,17 @@ class TestFindInBlacklists:
         urls = ["https://custom-blocked.com"]
         result = await domain.find_in_blacklists(urls)
         assert result[0] is not None
+        assert "custom_blocklist" in result[1]
+
+    async def test_subdomain_matches_official_blacklist(self, official_domains):
+        urls = ["https://claim.free.phishing.xyz/nitro"]
+        result = await domain.find_in_blacklists(urls)
+        assert result == ("claim.free.phishing.xyz", "official_blacklist")
+
+    async def test_subdomain_matches_custom_blocklist(self, mock_db_with_blocklist, official_domains):
+        urls = ["https://auth.custom-blocked.com/login"]
+        result = await domain.find_in_blacklists(urls)
+        assert result[0] == "auth.custom-blocked.com"
         assert "custom_blocklist" in result[1]
 
     async def test_no_match(self, official_domains):

@@ -56,9 +56,13 @@ class TestLifecycleListenersAndTasks:
         bot, listeners, _ = setup_context
         guild = MagicMock(id=12345)
 
-        with patch("anti_phishing.db.get_or_create_guild_config", side_effect=Exception("DB fail")):
-            # Should not raise — calls mark_database_unavailable
+        with (
+            patch("anti_phishing.db.get_or_create_guild_config", side_effect=Exception("DB fail")),
+            patch("anti_phishing.logger.warning") as mock_log,
+        ):
             await listeners["on_guild_join"](guild)
+            mock_log.assert_called_once()
+            assert "Database unavailable" in mock_log.call_args[0][0]
 
     async def test_prune_rate_limits_loop(self, setup_context):
         _, _, loops = setup_context
@@ -72,9 +76,13 @@ class TestLifecycleListenersAndTasks:
         _, _, loops = setup_context
         prune_task = loops["prune_rate_limits"]
 
-        with patch("anti_phishing.rate_limit.prune_stale_entries", side_effect=Exception("error")):
-            # Should not raise
+        with (
+            patch("anti_phishing.rate_limit.prune_stale_entries", side_effect=Exception("error")),
+            patch("anti_phishing.logger.warning") as mock_log,
+        ):
             await prune_task.coro()
+            mock_log.assert_called_once()
+            assert "Failed to prune stale rate-limit entries" in mock_log.call_args[0][0]
 
     async def test_on_ready_success(self, setup_context):
         bot, listeners, loops = setup_context
@@ -91,9 +99,13 @@ class TestLifecycleListenersAndTasks:
         bot, listeners, _ = setup_context
         bot.guilds = [MagicMock(id=10)]
 
-        with patch("anti_phishing.backfill_guild_configs", side_effect=Exception("DB down")):
-            # Should not raise — calls mark_database_unavailable
+        with (
+            patch("anti_phishing.backfill_guild_configs", side_effect=Exception("DB down")),
+            patch("anti_phishing.logger.warning") as mock_log,
+        ):
             await listeners["on_ready"]()
+            mock_log.assert_called_once()
+            assert "Database unavailable" in mock_log.call_args[0][0]
 
     async def test_recover_database_already_available(self, setup_context):
         _, _, loops = setup_context
@@ -167,6 +179,10 @@ class TestLifecycleListenersAndTasks:
             await listeners["on_guild_join"](guild)
 
         recover_task = captured_loops["recover_database"]
-        with patch("anti_phishing.db.migrate", side_effect=Exception("still down")):
-            # Should catch and log warning without raising
+        with (
+            patch("anti_phishing.db.migrate", side_effect=Exception("still down")),
+            patch("anti_phishing.logger.warning") as mock_log,
+        ):
             await recover_task.coro()
+            mock_log.assert_called_once()
+            assert "Database recovery attempt failed" in mock_log.call_args[0][0]

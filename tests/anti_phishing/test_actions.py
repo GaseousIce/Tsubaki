@@ -166,15 +166,21 @@ class TestHandleDetectionActions:
         message.guild.fetch_member.assert_awaited_once_with(456)
         member_fetched.timeout.assert_awaited_once()
 
-    async def test_member_not_found_returns_early(self, mock_db):
+    async def test_member_not_found_still_deletes_message_and_alerts(self, mock_db):
         message = self._make_mock_message()
         message.guild.fetch_member = AsyncMock(side_effect=discord.NotFound(MagicMock(), "not found"))
-        guild_cfg = {"action": "timeout", "alert_channels": []}
+        mock_channel = MagicMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock()
+        message.guild.get_channel = MagicMock(return_value=mock_channel)
+        guild_cfg = {"action": "timeout", "alert_channels": [789]}
 
-        await handle_detection(message, None, guild_cfg, "https://evil.com", "official_blacklist")
+        with patch("anti_phishing.actions.db.log_detection", new_callable=AsyncMock) as mock_log:
+            await handle_detection(message, None, guild_cfg, "https://evil.com", "official_blacklist")
+            mock_log.assert_awaited_once()
 
         message.guild.fetch_member.assert_awaited_once_with(456)
-        message.delete.assert_not_called()
+        message.delete.assert_awaited_once()
+        mock_channel.send.assert_awaited_once()
 
     async def test_db_log_detection_failure_continues(self, mock_db):
         message = self._make_mock_message()
@@ -220,15 +226,15 @@ class TestHandleDetectionActions:
         member.timeout.assert_awaited_once()
         message.delete.assert_awaited_once()
 
-    async def test_alert_channel_with_content_and_files(self, mock_db):
+    async def test_alert_channel_with_content_and_attachment_metadata(self, mock_db):
         message = self._make_mock_message()
         message.content = "Look at this free promo!"
-        mock_file = MagicMock(spec=discord.File)
         mock_att = MagicMock(spec=discord.Attachment)
         mock_att.filename = "promo.png"
         mock_att.url = "https://cdn.discordapp.com/promo.png"
         mock_att.size = 1024
-        mock_att.to_file = AsyncMock(return_value=mock_file)
+        mock_att.read = AsyncMock()
+        mock_att.to_file = AsyncMock()
         message.attachments = [mock_att]
 
         member = self._make_mock_member()
@@ -248,26 +254,30 @@ class TestHandleDetectionActions:
                 attachments=["https://cdn.discordapp.com/promo.png"],
             )
 
+        # Verify NO downloads occur
+        mock_att.read.assert_not_called()
+        mock_att.to_file.assert_not_called()
+
         mock_channel.send.assert_awaited_once()
         kwargs = mock_channel.send.call_args.kwargs
-        assert "files" in kwargs
-        assert kwargs["files"] == [mock_file]
+        assert "files" not in kwargs
         embed = kwargs["embed"]
         fields = {f.name: f.value for f in embed.fields}
         assert "Message Content" in fields
         assert fields["Message Content"] == "Look at this free promo!"
         assert "Attachments (1)" in fields
         assert "promo.png" in fields["Attachments (1)"]
+        assert "https://cdn.discordapp.com/promo.png" in fields["Attachments (1)"]
 
-    async def test_alert_channel_fallback_image_when_to_file_fails(self, mock_db):
+    async def test_alert_channel_image_attachment_sets_embed_image_without_download(self, mock_db):
         message = self._make_mock_message()
         message.content = ""
         mock_att = MagicMock(spec=discord.Attachment)
         mock_att.filename = "screenshot.jpg"
         mock_att.url = "https://cdn.discordapp.com/screenshot.jpg"
         mock_att.size = 1024
-        mock_att.read = AsyncMock(side_effect=Exception("Failed to download"))
-        mock_att.to_file = AsyncMock(side_effect=Exception("Failed to download"))
+        mock_att.read = AsyncMock()
+        mock_att.to_file = AsyncMock()
         message.attachments = [mock_att]
 
         member = self._make_mock_member()
@@ -277,6 +287,10 @@ class TestHandleDetectionActions:
 
         guild_cfg = {"action": "timeout", "alert_channels": [789]}
         await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
+
+        # Verify NO downloads occur
+        mock_att.read.assert_not_called()
+        mock_att.to_file.assert_not_called()
 
         mock_channel.send.assert_awaited_once()
         kwargs = mock_channel.send.call_args.kwargs
@@ -425,20 +439,22 @@ class TestHandleDetectionActions:
         assert len(fields["Attachments (5)"]) <= 1024
         assert fields["Attachments (5)"].endswith("...")
 
-    async def test_alert_cumulative_attachment_size_budget_respected(self, mock_db):
+    async def test_alert_channel_large_attachments_metadata_only(self, mock_db):
         message = self._make_mock_message()
         message.content = "payloads"
         att1 = MagicMock(spec=discord.Attachment)
         att1.filename = "file1.png"
         att1.url = "https://cdn.discordapp.com/file1.png"
-        att1.size = 6 * 1024 * 1024
-        att1.read = AsyncMock(return_value=b"x" * (6 * 1024 * 1024))
+        att1.size = 25 * 1024 * 1024
+        att1.read = AsyncMock()
+        att1.to_file = AsyncMock()
 
         att2 = MagicMock(spec=discord.Attachment)
         att2.filename = "file2.png"
         att2.url = "https://cdn.discordapp.com/file2.png"
-        att2.size = 6 * 1024 * 1024
-        att2.read = AsyncMock(return_value=b"y" * (6 * 1024 * 1024))
+        att2.size = 50 * 1024 * 1024
+        att2.read = AsyncMock()
+        att2.to_file = AsyncMock()
 
         message.attachments = [att1, att2]
 
@@ -450,51 +466,43 @@ class TestHandleDetectionActions:
         guild_cfg = {"action": "timeout", "alert_channels": [789]}
         await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
 
-        mock_channel.send.assert_awaited_once()
-        files = mock_channel.send.call_args.kwargs.get("files", [])
-        # Only the first file fits in the 10 MB budget (6 MB + 6 MB > 10 MB)
-        assert len(files) == 1
-        assert files[0].filename == "file1.png"
+        # No download attempts made
+        att1.read.assert_not_called()
+        att1.to_file.assert_not_called()
+        att2.read.assert_not_called()
+        att2.to_file.assert_not_called()
 
-    async def test_alert_channel_http_exception_falls_back_to_text_only(self, mock_db):
+        mock_channel.send.assert_awaited_once()
+        assert "files" not in mock_channel.send.call_args.kwargs
+        embed = mock_channel.send.call_args.kwargs["embed"]
+        fields = {f.name: f.value for f in embed.fields}
+        assert "Attachments (2)" in fields
+        assert "file1.png" in fields["Attachments (2)"]
+        assert "file2.png" in fields["Attachments (2)"]
+
+    async def test_alert_channel_http_exception_logged(self, mock_db):
         message = self._make_mock_message()
         member = self._make_mock_member()
         mock_channel = MagicMock(spec=discord.TextChannel)
-
-        mock_file = MagicMock(spec=discord.File)
-        mock_att = MagicMock(spec=discord.Attachment)
-        mock_att.filename = "promo.png"
-        mock_att.url = "https://cdn.discordapp.com/promo.png"
-        mock_att.size = 1024
-        mock_att.to_file = AsyncMock(return_value=mock_file)
-        message.attachments = [mock_att]
-
-        # First call with files raises HTTPException (e.g. 413 Payload Too Large)
-        # Second fallback call without files succeeds
         mock_channel.send = AsyncMock(
-            side_effect=[
-                discord.HTTPException(MagicMock(), "413 Payload Too Large"),
-                MagicMock(),
-            ]
+            side_effect=discord.HTTPException(MagicMock(status=500), "Discord Internal Error")
         )
         message.guild.get_channel = MagicMock(return_value=mock_channel)
 
         guild_cfg = {"action": "timeout", "alert_channels": [789]}
         await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
 
-        assert mock_channel.send.call_count == 2
-        # First call had files
-        assert "files" in mock_channel.send.call_args_list[0].kwargs
-        # Second call was the fallback without files
-        assert "files" not in mock_channel.send.call_args_list[1].kwargs
+        mock_channel.send.assert_awaited_once()
+        message.delete.assert_awaited_once()
 
-    async def test_alert_multiple_channels_with_cached_attachments(self, mock_db):
+    async def test_alert_multiple_channels_with_attachment_metadata(self, mock_db):
         message = self._make_mock_message()
         att = MagicMock(spec=discord.Attachment)
         att.filename = "test.png"
         att.url = "https://cdn.discordapp.com/test.png"
         att.size = 100
-        att.read = AsyncMock(return_value=b"image-bytes")
+        att.read = AsyncMock()
+        att.to_file = AsyncMock()
         message.attachments = [att]
 
         member = self._make_mock_member()
@@ -515,13 +523,32 @@ class TestHandleDetectionActions:
         guild_cfg = {"action": "timeout", "alert_channels": [111, 222]}
         await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
 
+        att.read.assert_not_called()
+        att.to_file.assert_not_called()
         channel1.send.assert_awaited_once()
         channel2.send.assert_awaited_once()
-        f1 = channel1.send.call_args.kwargs["files"][0]
-        f2 = channel2.send.call_args.kwargs["files"][0]
-        # Both channels receive valid file streams with the data
-        assert f1.fp.read() == b"image-bytes"
-        assert f2.fp.read() == b"image-bytes"
+        assert "files" not in channel1.send.call_args.kwargs
+        assert "files" not in channel2.send.call_args.kwargs
+        embed1 = channel1.send.call_args.kwargs["embed"]
+        embed2 = channel2.send.call_args.kwargs["embed"]
+        assert embed1.title == "⚠️ Phishing Detected"
+        assert embed2.title == "⚠️ Phishing Detected"
+
+    async def test_member_send_http_exception_continues_punishment_and_alert(self, mock_db):
+        message = self._make_mock_message()
+        member = self._make_mock_member()
+        member.send = AsyncMock(side_effect=discord.HTTPException(MagicMock(status=429), "Too Many Requests"))
+        mock_channel = MagicMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock()
+        message.guild.get_channel = MagicMock(return_value=mock_channel)
+
+        guild_cfg = {"action": "timeout", "alert_channels": [789]}
+        await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
+
+        member.send.assert_awaited_once()
+        member.timeout.assert_awaited_once()
+        message.delete.assert_awaited_once()
+        mock_channel.send.assert_awaited_once()
 
 
 class TestPhishingAlertViewCallbacks:

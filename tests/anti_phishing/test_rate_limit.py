@@ -33,7 +33,9 @@ class TestClearUser:
         assert 1 not in rate_limit._tracker
 
     def test_clear_nonexistent_user_does_not_raise(self):
+        assert 999 not in rate_limit._tracker
         rate_limit.clear_user(999)
+        assert 999 not in rate_limit._tracker
 
 
 class TestPruneStaleEntries:

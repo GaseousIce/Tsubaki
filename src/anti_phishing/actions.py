@@ -1,5 +1,4 @@
 import datetime
-import io
 import logging
 
 import discord
@@ -101,18 +100,26 @@ async def is_moderator(user: discord.User | discord.Member, guild_cfg: dict) -> 
 
 
 class PhishingAlertView(discord.ui.View):
-    def __init__(self, member: discord.Member, url: str | None, action: str, guild_cfg: dict):
+    def __init__(
+        self,
+        member: discord.Member | None,
+        url: str | None,
+        action: str,
+        guild_cfg: dict,
+        author_id: int | None = None,
+    ):
         super().__init__(timeout=None)
         self.member = member
         self.url = url
         self.action = action
         self.guild_cfg = guild_cfg
+        member_id = member.id if member is not None else (author_id or 0)
 
         self.pardon_button = discord.ui.Button(
             label="Pardon User",
             style=discord.ButtonStyle.primary,
-            custom_id=f"phish_pardon:{member.id}",
-            disabled=(action != "timeout"),
+            custom_id=f"phish_pardon:{member_id}",
+            disabled=(action != "timeout" or member is None),
         )
         self.pardon_button.callback = self.pardon_callback
         self.add_item(self.pardon_button)
@@ -120,8 +127,8 @@ class PhishingAlertView(discord.ui.View):
         self.ban_button = discord.ui.Button(
             label="Ban User",
             style=discord.ButtonStyle.danger,
-            custom_id=f"phish_ban:{member.id}",
-            disabled=(action == "ban"),
+            custom_id=f"phish_ban:{member_id}",
+            disabled=(action == "ban" or member is None),
         )
         self.ban_button.callback = self.ban_callback
         self.add_item(self.ban_button)
@@ -132,7 +139,7 @@ class PhishingAlertView(discord.ui.View):
         self.allow_button = discord.ui.Button(
             label="Allow URL",
             style=discord.ButtonStyle.success,
-            custom_id=f"phish_allow:{member.id}",
+            custom_id=f"phish_allow:{member_id}",
             disabled=(not url),
         )
         self.allow_button.callback = self.allow_callback
@@ -224,53 +231,13 @@ async def handle_detection(
     if member is None:
         try:
             member = await guild.fetch_member(message.author.id)
-        except discord.NotFound:
-            logger.warning("User %s not found in guild %s — cannot punish", message.author.id, guild.id)
-            return
+        except (discord.NotFound, discord.HTTPException):
+            logger.warning("User %s not found in guild %s — proceeding without member", message.author.id, guild.id)
+            member = None
 
-    # Extract attachments before message deletion
-    cached_attachments: list[tuple[str, bytes | discord.File]] = []
-    attachment_urls: list[str] = []
-    total_cached_bytes = 0
-    max_total_bytes = 10 * 1024 * 1024  # 10 MB cumulative budget for re-uploading
-    for att in getattr(message, "attachments", [])[:5]:
-        att_url = getattr(att, "url", None)
-        if att_url:
-            attachment_urls.append(att_url)
-        try:
-            size = getattr(att, "size", 0) or 0
-            if size <= 8 * 1024 * 1024 and (total_cached_bytes + size) <= max_total_bytes:
-                fname = getattr(att, "filename", "attachment")
-                read_data = None
-                if hasattr(att, "read"):
-                    try:
-                        data = await att.read()
-                        if isinstance(data, bytes):
-                            read_data = data
-                    except Exception as err:
-                        logger.debug("Could not read bytes for attachment %s: %s", fname, err)
-                        read_data = None
-                if read_data is not None:
-                    cached_attachments.append((fname, read_data))
-                    total_cached_bytes += len(read_data)
-                elif hasattr(att, "to_file"):
-                    f = await att.to_file()
-                    if f:
-                        if hasattr(f, "fp") and hasattr(f.fp, "read") and hasattr(f.fp, "seek"):
-                            try:
-                                f.fp.seek(0)
-                                raw = f.fp.read()
-                                if isinstance(raw, bytes) and len(raw) > 0:
-                                    cached_attachments.append((fname, raw))
-                                    total_cached_bytes += len(raw)
-                                else:
-                                    cached_attachments.append((fname, f))
-                            except Exception:
-                                cached_attachments.append((fname, f))
-                        else:
-                            cached_attachments.append((fname, f))
-        except Exception as exc:
-            logger.warning("Could not read attachment %s: %s", getattr(att, "filename", "unknown"), exc)
+    # Extract metadata only (do not download attachment bytes)
+    raw_attachments = getattr(message, "attachments", [])
+    attachment_urls: list[str] = [att.url for att in raw_attachments if getattr(att, "url", None)]
 
     # Extract embed details
     embed_summaries = []
@@ -313,48 +280,39 @@ async def handle_detection(
         except Exception as exc:
             logger.warning("DB log_detection failed: %s", exc)
 
-    # 2. Delete message.
+    # 2. Delete message immediately to contain the threat.
     try:
         await message.delete()
     except discord.Forbidden:
         logger.warning("Missing permission to delete message in guild %s", guild.id)
     except discord.NotFound:
         pass
+    except discord.HTTPException as exc:
+        logger.debug("Failed to delete message: %s", exc)
 
     action = guild_cfg.get("action", "timeout")
 
-    # 3. DM user.
-    dm_embed = _build_dm_embed(guild.name, url, action, guild_cfg.get("dm_message"))
-    try:
-        await member.send(embed=dm_embed)
-    except discord.Forbidden:
-        logger.info("Could not DM user %s (DMs closed)", member.id)
-
-    # 4. Punish.
-    audit_reason = f"Anti-phishing: {reason} ({url})"
-
-    if action == "timeout":
-        duration_secs = guild_cfg.get("timeout_duration", 604800)
-        until = discord.utils.utcnow() + datetime.timedelta(seconds=duration_secs)
+    if member is not None:
+        # 3. DM user.
+        dm_embed = _build_dm_embed(guild.name, url, action, guild_cfg.get("dm_message"))
         try:
-            await member.timeout(until, reason=audit_reason)
-        except discord.Forbidden:
-            logger.warning("Missing permission to timeout %s in guild %s", member.id, guild.id)
+            await member.send(embed=dm_embed)
+        except (discord.Forbidden, discord.HTTPException):
+            logger.info("Could not DM user %s (DMs closed or rate limited)", member.id)
 
-    elif action == "kick":
+        # 4. Punish.
+        audit_reason = f"Anti-phishing: {reason} ({url})"
         try:
-            await member.kick(reason=audit_reason)
-        except discord.Forbidden:
-            logger.warning("Missing permission to kick %s in guild %s", member.id, guild.id)
-
-    elif action == "ban":
-        try:
-            await member.ban(reason=audit_reason)
-        except discord.Forbidden:
-            logger.warning("Missing permission to ban %s in guild %s", member.id, guild.id)
-
-    elif action == "warn":
-        pass
+            if action == "timeout":
+                duration_secs = guild_cfg.get("timeout_duration", 604800)
+                until = discord.utils.utcnow() + datetime.timedelta(seconds=duration_secs)
+                await member.timeout(until, reason=audit_reason)
+            elif action == "kick":
+                await member.kick(reason=audit_reason)
+            elif action == "ban":
+                await member.ban(reason=audit_reason)
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            logger.warning("Missing permission or failed to %s %s in guild %s: %s", action, member.id, guild.id, exc)
 
     # 5. Alert mod channels.
     alert_channels: list[int] = guild_cfg.get("alert_channels", [])
@@ -362,10 +320,15 @@ async def handle_detection(
 
     if alert_channels:
         ping_str = " ".join(f"<@&{r}>" for r in mod_roles) if mod_roles else ""
+        user_line = (
+            f"**User:** {member.mention} (`{member}`, ID: `{member.id}`)\n"
+            if member
+            else f"**User:** <@{message.author.id}> (ID: `{message.author.id}`)\n"
+        )
         alert_embed = discord.Embed(
             title="⚠️ Phishing Detected",
             description=(
-                f"**User:** {member.mention} (`{member}`, ID: `{member.id}`)\n"
+                f"{user_line}"
                 f"**URL:** `{url or 'unknown'}`\n"
                 f"**Reason:** `{reason}`\n"
                 f"**Action:** `{action}`\n"
@@ -376,7 +339,7 @@ async def handle_detection(
         alert_embed.set_footer(text=f"Guild: {guild.name}")
 
         content_text = getattr(message, "content", "") or ""
-        if content_text:
+        if content_text.strip():
             preview = content_text if len(content_text) <= 1000 else content_text[:997] + "..."
             alert_embed.add_field(name="Message Content", value=preview, inline=False)
         elif embed_summaries:
@@ -396,7 +359,17 @@ async def handle_detection(
 
         attachments_list = getattr(message, "attachments", [])
         if attachments_list:
-            att_lines = [f"• [{getattr(a, 'filename', 'file')}]({getattr(a, 'url', '')})" for a in attachments_list[:5]]
+            att_lines = []
+            for a in attachments_list[:5]:
+                fname = getattr(a, "filename", "attachment")
+                a_url = getattr(a, "url", None)
+                raw_size = getattr(a, "size", None)
+                size = raw_size if isinstance(raw_size, int) else 0
+                size_str = f" ({size // 1024} KB)" if size >= 1024 else (f" ({size} B)" if size > 0 else "")
+                if a_url:
+                    att_lines.append(f"• [{fname}]({a_url}){size_str}")
+                else:
+                    att_lines.append(f"• {fname}{size_str}")
             if len(attachments_list) > 5:
                 att_lines.append(f"*(and {len(attachments_list) - 5} more)*")
             att_value = "\n".join(att_lines)
@@ -408,62 +381,34 @@ async def handle_detection(
                 inline=False,
             )
 
-        # If no files can be re-uploaded directly, set fallback image on alert embed
-        if not cached_attachments:
-            if attachments_list:
-                first_att = attachments_list[0]
-                filename = getattr(first_att, "filename", "").lower()
-                if any(filename.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".webp", ".gif")):
-                    alert_embed.set_image(url=first_att.url)
-            elif embed_images:
-                alert_embed.set_image(url=embed_images[0])
+        if attachments_list:
+            first_att = attachments_list[0]
+            filename = getattr(first_att, "filename", "").lower()
+            if any(filename.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".webp", ".gif")):
+                att_url = getattr(first_att, "url", None)
+                if att_url:
+                    alert_embed.set_image(url=att_url)
+        elif embed_images:
+            alert_embed.set_image(url=embed_images[0])
 
         for channel_id in alert_channels:
             ch = guild.get_channel(channel_id)
             if ch is None:
                 continue
             try:
-                view = PhishingAlertView(member, url, action, guild_cfg)
-                if cached_attachments:
-                    files_to_send = []
-                    for fn, item in cached_attachments:
-                        if isinstance(item, bytes):
-                            files_to_send.append(discord.File(io.BytesIO(item), filename=fn))
-                        else:
-                            if hasattr(item, "reset"):
-                                try:
-                                    item.reset()
-                                except Exception:
-                                    pass
-                            elif hasattr(getattr(item, "fp", None), "seek"):
-                                try:
-                                    item.fp.seek(0)
-                                except Exception:
-                                    pass
-                            files_to_send.append(item)
-                    await ch.send(content=ping_str or None, embed=alert_embed, view=view, files=files_to_send)
-                else:
-                    await ch.send(content=ping_str or None, embed=alert_embed, view=view)
+                view = PhishingAlertView(member, url, action, guild_cfg, author_id=message.author.id)
+                await ch.send(content=ping_str or None, embed=alert_embed, view=view)
             except discord.Forbidden:
                 logger.warning("Cannot send alert to channel %s in guild %s", channel_id, guild.id)
             except discord.HTTPException as exc:
-                logger.warning(
-                    "Failed to send alert with attachments to channel %s in guild %s: %s; retrying without files",
-                    channel_id,
-                    guild.id,
-                    exc,
-                )
-                try:
-                    await ch.send(content=ping_str or None, embed=alert_embed, view=view)
-                except Exception as retry_exc:
-                    logger.warning("Failed to send fallback alert to channel %s: %s", channel_id, retry_exc)
+                logger.warning("Failed to send alert to channel %s in guild %s: %s", channel_id, guild.id, exc)
 
     logger.info(
         "Anti-phishing action=%s url=%s reason=%s user=%s guild=%s content=%r attachments=%r",
         action,
         url,
         reason,
-        member.id,
+        member.id if member else message.author.id,
         guild.id,
         getattr(message, "content", ""),
         all_attachments,

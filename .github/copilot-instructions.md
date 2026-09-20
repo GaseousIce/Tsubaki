@@ -32,7 +32,7 @@ Missing Turso vars crash at startup. Missing Groq key gracefully disables `/ask`
 - `channel_clear.py` — `/clear` command (supports `limit`, `user`, `bots_only`) + daily 3AM auto-clear via `tasks.loop`.
 - `anti_phishing/` — 5 files:
   - `__init__.py`: setup, event listeners, background tasks (`prune_rate_limits`, `recover_database`), command group (`settings`, `stats`).
-  - `actions.py`: detection handling, in-memory attachment caching & re-upload, user DM, punishment (`timeout`/`kick`/`ban`/`warn`), mod alerts with content & embed previews, interactive buttons (`PhishingAlertView`).
+  - `actions.py`: detection handling, attachment metadata extraction, user DM, punishment (`timeout`/`kick`/`ban`/`warn`), mod alerts with content & embed previews, interactive buttons (`PhishingAlertView`).
   - `commands.py`: `/antiphishing settings` dashboard and `/antiphishing stats`.
   - `domain.py`: URL extraction from text, embeds, and attachments; official blacklist fetching, typosquatting checks.
   - `rate_limit.py`: multi-channel link spam tracker (3+ channels in 10s), hourly stale entry pruning.

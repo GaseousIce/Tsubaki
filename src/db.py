@@ -49,13 +49,17 @@ async def migrate() -> None:
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_detection_log_guild_timestamp ON detection_log (guild_id, timestamp DESC)"
     )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_detection_log_guild_domain ON detection_log (guild_id, domain)")
     table_info = await db.execute("PRAGMA table_info(detection_log)")
     existing_cols = {row[1] for row in table_info.rows} if table_info.rows else set()
     if existing_cols:
-        if "content" not in existing_cols:
-            await db.execute("ALTER TABLE detection_log ADD COLUMN content TEXT")
-        if "attachments" not in existing_cols:
-            await db.execute("ALTER TABLE detection_log ADD COLUMN attachments TEXT")
+        for col in ("content", "attachments"):
+            if col not in existing_cols:
+                try:
+                    await db.execute(f"ALTER TABLE detection_log ADD COLUMN {col} TEXT")
+                except Exception as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
 
 
 DEFAULT_GUILD_CONFIG = {

@@ -13,8 +13,8 @@ Incoming messages are checked before links can spread through a server:
 3. Match against the global custom blocklist stored in Turso/libSQL and shared by every server using the database.
 4. Scan configured typosquat patterns.
 5. Detect link spam across 3+ unique channels within 10 seconds.
-6. Delete the message, DM the user with recovery guidance, apply the configured action, and log the detection (including message text and attachment URLs) to Turso.
-7. Alert configured moderator channels with interactive action buttons, deleted message text, embed previews, and byte-cached re-uploaded attachment evidence.
+6. Delete the message, DM the user with recovery guidance, apply the configured action, and log the detection (including message text and attachment URLs/metadata) to Turso.
+7. Alert configured moderator channels with interactive action buttons, deleted message text, embed previews, and attachment metadata evidence.
 
 Supported actions are `timeout`, `kick`, `ban`, and `warn`. Defaults are enabled anti-phishing, a 7-day timeout, no alert channels, no mod roles, no bypass role, and the built-in recovery DM.
 
@@ -102,7 +102,7 @@ Tsubaki/
 │   ├── groq_service.py      # Groq /ask client wrapper
 │   └── anti_phishing/       # Detection pipeline, interactive UI, actions, domains
 │       ├── __init__.py      # Listener setup, background tasks, slash group
-│       ├── actions.py       # Detection handler, attachment re-upload, mod alerts
+│       ├── actions.py       # Detection handler, attachment metadata logging, mod alerts
 │       ├── commands.py      # /antiphishing settings dashboard and stats
 │       ├── domain.py        # URL parsing, official list fetching, typosquatting
 │       └── rate_limit.py    # Channel-spread rate limiter and auto-pruning

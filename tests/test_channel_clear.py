@@ -52,8 +52,9 @@ class TestDailyClearSetup:
         import channel_clear
 
         bot = MagicMock()
-        # Should not raise — just logs a warning and returns
-        channel_clear.setup(bot)
+        with patch.object(channel_clear.tasks, "loop") as mock_loop:
+            channel_clear.setup(bot)
+            mock_loop.assert_not_called()
 
     def test_invalid_channel_id_skips_loop(self, monkeypatch):
         """When CLEAR_CHANNEL_ID is not a valid integer, setup returns early."""
@@ -62,8 +63,11 @@ class TestDailyClearSetup:
         import channel_clear
 
         bot = MagicMock()
-        # Should not raise — logs an error and returns
-        channel_clear.setup(bot)
+        with patch.object(channel_clear.tasks, "loop") as mock_loop, patch("channel_clear.logger.error") as mock_err:
+            channel_clear.setup(bot)
+            mock_loop.assert_not_called()
+            mock_err.assert_called_once()
+            assert "CLEAR_CHANNEL_ID is not a valid snowflake" in mock_err.call_args[0][0]
 
     def test_valid_channel_id_starts_loop(self, monkeypatch):
         """When CLEAR_CHANNEL_ID is a valid snowflake, the daily loop starts."""
@@ -329,7 +333,11 @@ class TestDailyClearExecution:
         bot = MagicMock()
         bot.get_channel.side_effect = Exception("Discord API explosion")
 
-        with patch.object(channel_clear.tasks, "loop", side_effect=fake_loop):
+        with (
+            patch.object(channel_clear.tasks, "loop", side_effect=fake_loop),
+            patch("channel_clear.logger.exception") as mock_log,
+        ):
             channel_clear.setup(bot)
-            # Should not raise
             await captured_task.coro()
+            mock_log.assert_called_once()
+            assert "Failed to run daily channel clear" in mock_log.call_args[0][0]

@@ -198,5 +198,5 @@ class TestAskErrorHandling:
         interaction.response.send_message = AsyncMock(side_effect=discord.HTTPException(MagicMock(), "failed"))
         error = discord.app_commands.AppCommandError("Unexpected")
 
-        # Should not raise
         await ask_cmd.on_error(interaction, error)
+        interaction.response.send_message.assert_awaited_once()
