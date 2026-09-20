@@ -1,5 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from anti_phishing import domain
 
 
@@ -72,6 +74,25 @@ class TestExtractUrls:
         assert "https://title-url.com" in result
         assert "https://field-url.com" in result
 
+    def test_url_from_embed_footer_and_author(self):
+        class FakeFooter:
+            text = "Help at https://footer-link.com"
+
+        class FakeAuthor:
+            url = "https://author-link.com"
+
+        class FakeEmbed:
+            url = None
+            description = None
+            title = None
+            fields = []
+            footer = FakeFooter()
+            author = FakeAuthor()
+
+        result = domain.extract_urls("", embeds=[FakeEmbed()])
+        assert "https://footer-link.com" in result
+        assert "https://author-link.com" in result
+
 
 class TestExtractHostnames:
     def test_standard_url(self):
@@ -115,6 +136,12 @@ class TestFindInBlacklists:
         urls = ["https://phishing.xyz"]
         result = await domain.find_in_blacklists(urls)
         assert result[1] == "official_blacklist"
+
+    async def test_custom_blocklist_db_exception_continues(self, official_domains):
+        urls = ["https://safe-site.com"]
+        with patch("anti_phishing.domain.db.get_blocklist_source", side_effect=Exception("DB fail")):
+            result = await domain.find_in_blacklists(urls)
+            assert result == (None, None)
 
 
 class TestFetchBlacklist:
@@ -196,6 +223,7 @@ class TestFetchOfficialBlacklist:
             assert domain.official == {"existing.com"}
 
 
+@pytest.mark.network
 class TestRealFetchBlacklist:
     """Integration tests that hit the actual GitHub API."""
 

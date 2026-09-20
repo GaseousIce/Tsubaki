@@ -1,5 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import discord
+
 
 class TestAskCommand:
     async def test_ask_no_ai_service(self, simcord_env):
@@ -61,3 +63,140 @@ class TestAskCommand:
         assert followup is not None
         assert len(followup.content) == 2000
         assert followup.content.endswith("...")
+
+
+class TestAskErrorHandling:
+    async def test_cooldown_error(self):
+        import commands
+
+        bot = MagicMock()
+        registered_commands = {}
+
+        def mock_command(**kwargs):
+            def decorator(func):
+                cmd = MagicMock()
+                cmd.callback = func
+
+                def error_decorator(err_func):
+                    cmd.on_error = err_func
+                    return err_func
+
+                cmd.error = error_decorator
+                registered_commands[kwargs.get("name", func.__name__)] = cmd
+                return cmd
+
+            return decorator
+
+        bot.tree.command = mock_command
+        commands.setup(bot)
+        ask_cmd = registered_commands["ask"]
+
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.response.send_message = AsyncMock()
+        cooldown = discord.app_commands.Cooldown(1, 5.0)
+        error = discord.app_commands.CommandOnCooldown(cooldown, retry_after=4.5)
+
+        await ask_cmd.on_error(interaction, error)
+        interaction.response.send_message.assert_awaited_once()
+        content = interaction.response.send_message.call_args.args[0]
+        assert "4.5s" in content
+        assert "Don't spam me!" in content
+
+    async def test_generic_error_response_not_done(self):
+        import commands
+
+        bot = MagicMock()
+        registered_commands = {}
+
+        def mock_command(**kwargs):
+            def decorator(func):
+                cmd = MagicMock()
+                cmd.callback = func
+
+                def error_decorator(err_func):
+                    cmd.on_error = err_func
+                    return err_func
+
+                cmd.error = error_decorator
+                registered_commands[kwargs.get("name", func.__name__)] = cmd
+                return cmd
+
+            return decorator
+
+        bot.tree.command = mock_command
+        commands.setup(bot)
+        ask_cmd = registered_commands["ask"]
+
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.response.is_done.return_value = False
+        interaction.response.send_message = AsyncMock()
+        error = discord.app_commands.AppCommandError("Unexpected")
+
+        await ask_cmd.on_error(interaction, error)
+        interaction.response.send_message.assert_awaited_once_with("An error occurred.", ephemeral=True)
+
+    async def test_generic_error_response_is_done(self):
+        import commands
+
+        bot = MagicMock()
+        registered_commands = {}
+
+        def mock_command(**kwargs):
+            def decorator(func):
+                cmd = MagicMock()
+                cmd.callback = func
+
+                def error_decorator(err_func):
+                    cmd.on_error = err_func
+                    return err_func
+
+                cmd.error = error_decorator
+                registered_commands[kwargs.get("name", func.__name__)] = cmd
+                return cmd
+
+            return decorator
+
+        bot.tree.command = mock_command
+        commands.setup(bot)
+        ask_cmd = registered_commands["ask"]
+
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.response.is_done.return_value = True
+        interaction.followup.send = AsyncMock()
+        error = discord.app_commands.AppCommandError("Unexpected")
+
+        await ask_cmd.on_error(interaction, error)
+        interaction.followup.send.assert_awaited_once_with("An error occurred.", ephemeral=True)
+
+    async def test_error_handler_http_exception_suppressed(self):
+        import commands
+
+        bot = MagicMock()
+        registered_commands = {}
+
+        def mock_command(**kwargs):
+            def decorator(func):
+                cmd = MagicMock()
+                cmd.callback = func
+
+                def error_decorator(err_func):
+                    cmd.on_error = err_func
+                    return err_func
+
+                cmd.error = error_decorator
+                registered_commands[kwargs.get("name", func.__name__)] = cmd
+                return cmd
+
+            return decorator
+
+        bot.tree.command = mock_command
+        commands.setup(bot)
+        ask_cmd = registered_commands["ask"]
+
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.response.is_done.return_value = False
+        interaction.response.send_message = AsyncMock(side_effect=discord.HTTPException(MagicMock(), "failed"))
+        error = discord.app_commands.AppCommandError("Unexpected")
+
+        # Should not raise
+        await ask_cmd.on_error(interaction, error)

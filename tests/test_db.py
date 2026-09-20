@@ -36,7 +36,11 @@ class TestGetDb:
 class TestMigrate:
     async def test_migrate_creates_tables(self, mock_db):
         await db.migrate()
-        assert mock_db.execute.call_count >= 3
+        executed_sqls = [c[0][0] for c in mock_db.execute.call_args_list]
+        assert any("CREATE TABLE IF NOT EXISTS guild_configs" in sql for sql in executed_sqls)
+        assert any("CREATE TABLE IF NOT EXISTS detection_log" in sql for sql in executed_sqls)
+        assert any("CREATE TABLE IF NOT EXISTS custom_blocklist" in sql for sql in executed_sqls)
+        assert any("PRAGMA table_info(detection_log)" in sql for sql in executed_sqls)
 
     async def test_migrate_idempotent(self, mock_db):
         await db.migrate()
@@ -253,5 +257,17 @@ class TestConfigCache:
         db.clear_config_cache(12345)
 
         # Next read should query DB again
+        await db.get_guild_config(12345)
+        assert mock_db.execute.call_count == 2
+
+    async def test_clear_config_cache_all(self, mock_db):
+        stored = json.dumps({"enabled": True})
+        mock_db.execute.return_value = make_mock_rows([(stored,)])
+
+        await db.get_guild_config(12345)
+        assert mock_db.execute.call_count == 1
+
+        db.clear_config_cache(None)
+
         await db.get_guild_config(12345)
         assert mock_db.execute.call_count == 2

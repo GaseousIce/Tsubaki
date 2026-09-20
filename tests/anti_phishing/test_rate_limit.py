@@ -19,6 +19,11 @@ class TestRateLimitCheck:
         rate_limit.rate_limit_check(1, 100, "b", 10, 3)
         assert rate_limit.rate_limit_check(1, 100, "c", 10, 3) is False
 
+    def test_max_entries_capped(self):
+        for i in range(10):
+            rate_limit.rate_limit_check(1, 100, f"msg {i}", 10, 3)
+        assert len(rate_limit._tracker[1]) == 6
+
 
 class TestClearUser:
     def test_clears_existing_user(self):

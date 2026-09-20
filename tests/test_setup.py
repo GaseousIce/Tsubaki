@@ -25,6 +25,7 @@ class TestFormatDuration:
             (90000, "1d 1h"),
             (3661, "1h 1m"),
             (3600, "1h"),
+            (45, "45s"),
         ],
     )
     def test_various(self, seconds, expected):
@@ -179,6 +180,13 @@ class TestCheckAlertChannels:
         assert results[0][1] is False
         assert "Send Messages" in results[0][0]
 
+    def test_missing_view_and_embed_perms(self):
+        guild = self._make_guild_with_channels([(1, False, True, False)])
+        results = _check_alert_channels(guild, [1])
+        assert results[0][1] is False
+        assert "View Channel" in results[0][0]
+        assert "Embed Links" in results[0][0]
+
     def test_channel_deleted(self):
         guild = self._make_guild_with_channels([])
         results = _check_alert_channels(guild, [999])
@@ -204,3 +212,15 @@ class TestSetupCommand:
         embed_dict = followup.embeds[0].to_dict() if followup.embeds else {}
         embed_str = str(embed_dict)
         assert "Tsubaki" in embed_str or "Setup" in embed_str or "Bot Role" in embed_str
+
+    async def test_setup_failure_replies_error(self, simcord_env):
+        guild = simcord_env.create_guild()
+        channel = guild.create_text_channel("general")
+        alice = guild.add_member(simcord_env.create_user("alice"))
+
+        with patch("setup.db.get_or_create_guild_config", side_effect=Exception("DB exploded")):
+            result = await alice.slash(channel, "setup")
+
+        followup = result.followups[0] if result.followups else None
+        assert followup is not None
+        assert "Setup check failed" in followup.content

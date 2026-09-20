@@ -51,8 +51,8 @@ class TestAntiPhishingListener:
         domain = list(official_domains)[0]
         await alice.send(channel, f"Free nitro! https://{domain}/steam")
 
-        msg = channel.last_message
-        assert msg is None or domain not in (msg.content or "")
+        assert channel.last_message is None
+        assert len(channel.history()) == 0
 
     async def test_phishing_url_logs_full_message_to_alert_channel(self, simcord_env, mock_db, official_domains):
         """Verify full message text is delivered to the configured alert channel in integration."""
@@ -192,7 +192,8 @@ class TestAntiPhishingEdgeCases:
             domain = next(iter(official_domains))
             await alice.send(channel, f"https://{domain}/steam")
 
-        assert channel.last_message is None or domain not in (channel.last_message.content or "")
+        assert channel.last_message is None
+        assert len(channel.history()) == 0
         assert alice.member.timed_out_until is not None
         get_blocklist_source.assert_not_awaited()
         add_to_blocklist.assert_not_awaited()
@@ -240,7 +241,8 @@ class TestPhishingPunishment:
         # Send a blacklisted link — gets deleted, Alice timed out, 1 alert
         await alice.send(channel, f"https://{domain}/steam")
 
-        assert channel.last_message is None or domain not in str(channel.last_message.content or "")
+        assert channel.last_message is None
+        assert len(channel.history()) == 0
         assert alice.member.timed_out_until is not None
         assert len(alerts.history()) == 1
 
@@ -397,7 +399,9 @@ class TestChannelClear:
         await alice.send(channel, "message two")
 
         result = await alice.slash(channel, "clear")
-        assert result is None or result.response is None
+        assert result.response is None
+        assert not result.acknowledged
+        assert len(channel.history()) == 2
         simcord.asserts.assert_error(simcord_env, discord.app_commands.errors.MissingPermissions)
 
     async def test_clear_with_permission(self, simcord_env):

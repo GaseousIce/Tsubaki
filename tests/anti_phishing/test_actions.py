@@ -21,6 +21,7 @@ class TestParseDuration:
             ("28d", 2419200),
             ("999d", 2419200),
             ("garbage", 604800),
+            ("notanumberd", 604800),
             ("3600", 3600),
             ("99999999", 2419200),
             ("", 604800),
@@ -44,14 +45,7 @@ class TestBuildDmEmbed:
         embed = _build_dm_embed(guild, url, action, dm_msg)
         data = embed.to_dict()
         assert data["title"] == "🛡️ Account Compromised - Security Alert"
-        if check_desc in data["description"]:
-            pass
-        elif check_desc == "Custom alert!":
-            assert data["description"] == "Custom alert!"
-        elif check_desc == "unknown":
-            assert "unknown" in data["description"]
-        else:
-            assert check_desc in data["description"]
+        assert check_desc in data["description"]
         if check_action:
             assert check_action in str(data)
 
@@ -329,6 +323,82 @@ class TestHandleDetectionActions:
         assert "Original Embeds (1)" in fields
         assert "Scam Nitro Gift" in fields["Original Embeds (1)"]
 
+    async def test_timeout_forbidden_continues(self, mock_db):
+        message = self._make_mock_message()
+        member = self._make_mock_member()
+        member.timeout.side_effect = discord.Forbidden(MagicMock(), "no perm")
+        guild_cfg = {"action": "timeout", "alert_channels": []}
+
+        await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
+        message.delete.assert_awaited_once()
+
+    async def test_kick_forbidden_continues(self, mock_db):
+        message = self._make_mock_message()
+        member = self._make_mock_member()
+        member.kick.side_effect = discord.Forbidden(MagicMock(), "no perm")
+        guild_cfg = {"action": "kick", "alert_channels": []}
+
+        await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
+        message.delete.assert_awaited_once()
+
+    async def test_ban_forbidden_continues(self, mock_db):
+        message = self._make_mock_message()
+        member = self._make_mock_member()
+        member.ban.side_effect = discord.Forbidden(MagicMock(), "no perm")
+        guild_cfg = {"action": "ban", "alert_channels": []}
+
+        await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
+        message.delete.assert_awaited_once()
+
+    async def test_alert_with_mod_roles_and_many_attachments_and_long_embed(self, mock_db):
+        message = self._make_mock_message()
+        message.content = ""
+        # 7 attachments
+        attachments = []
+        for i in range(7):
+            att = MagicMock(spec=discord.Attachment)
+            att.filename = f"file{i}.png"
+            att.url = f"https://cdn.discordapp.com/file{i}.png"
+            attachments.append(att)
+        message.attachments = attachments
+
+        fake_embed = MagicMock(spec=discord.Embed)
+        fake_embed.title = "A" * 600
+        fake_embed.description = "B" * 600
+        fake_embed.url = None
+        fake_embed.fields = []
+        fake_embed.image = None
+        fake_embed.thumbnail = None
+        message.embeds = [fake_embed]
+
+        member = self._make_mock_member()
+        mock_channel = MagicMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock()
+        message.guild.get_channel = MagicMock(return_value=mock_channel)
+
+        guild_cfg = {"action": "warn", "alert_channels": [789], "mod_roles": [111, 222]}
+        await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
+
+        mock_channel.send.assert_awaited_once()
+        call_kwargs = mock_channel.send.call_args.kwargs
+        assert call_kwargs["content"] == "<@&111> <@&222>"
+        embed = call_kwargs["embed"]
+        fields = {f.name: f.value for f in embed.fields}
+        assert "Attachments (7)" in fields
+        assert "*(and 2 more)*" in fields["Attachments (7)"]
+        assert fields["Original Embeds (1)"].endswith("...")
+
+    async def test_alert_channel_send_forbidden_continues(self, mock_db):
+        message = self._make_mock_message()
+        member = self._make_mock_member()
+        mock_channel = MagicMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(), "no access"))
+        message.guild.get_channel = MagicMock(return_value=mock_channel)
+
+        guild_cfg = {"action": "timeout", "alert_channels": [789]}
+        await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
+        message.delete.assert_awaited_once()
+
 
 class TestPhishingAlertViewCallbacks:
     @staticmethod
@@ -399,6 +469,56 @@ class TestPhishingAlertViewCallbacks:
 
         interaction.message.edit.assert_not_called()
         interaction.followup.send.assert_awaited_once_with("❌ URL is not set or unknown.", ephemeral=True)
+
+    async def test_pardon_callback_forbidden(self):
+        member = self._make_member()
+        member.edit = AsyncMock(side_effect=discord.Forbidden(MagicMock(), "no perm"))
+        view = PhishingAlertView(member, "https://evil.com", "timeout", {"mod_roles": []})
+        interaction = self._make_interaction()
+
+        await view.pardon_callback(interaction)
+        interaction.followup.send.assert_awaited_once_with(
+            "❌ I do not have permission to edit/pardon this member.", ephemeral=True
+        )
+
+    async def test_pardon_callback_generic_exception(self):
+        member = self._make_member()
+        member.edit = AsyncMock(side_effect=Exception("network lag"))
+        view = PhishingAlertView(member, "https://evil.com", "timeout", {"mod_roles": []})
+        interaction = self._make_interaction()
+
+        await view.pardon_callback(interaction)
+        assert "Failed to pardon user" in interaction.followup.send.call_args.args[0]
+
+    async def test_ban_callback_forbidden(self):
+        member = self._make_member()
+        member.ban = AsyncMock(side_effect=discord.Forbidden(MagicMock(), "no perm"))
+        view = PhishingAlertView(member, "https://evil.com", "timeout", {"mod_roles": []})
+        interaction = self._make_interaction()
+
+        await view.ban_callback(interaction)
+        interaction.followup.send.assert_awaited_once_with(
+            "❌ I do not have permission to ban this member.", ephemeral=True
+        )
+
+    async def test_ban_callback_generic_exception(self):
+        member = self._make_member()
+        member.ban = AsyncMock(side_effect=Exception("network lag"))
+        view = PhishingAlertView(member, "https://evil.com", "timeout", {"mod_roles": []})
+        interaction = self._make_interaction()
+
+        await view.ban_callback(interaction)
+        assert "Failed to ban user" in interaction.followup.send.call_args.args[0]
+
+    async def test_allow_callback_db_exception(self, mock_db):
+        member = self._make_member()
+        view = PhishingAlertView(member, "https://allowed.com", "timeout", {"mod_roles": []})
+        interaction = self._make_interaction()
+
+        with patch("anti_phishing.actions.db.remove_from_blocklist", side_effect=Exception("DB fail")):
+            await view.allow_callback(interaction)
+
+        assert "Failed to allow URL" in interaction.followup.send.call_args.args[0]
 
     async def test_interaction_check_non_moderator_rejected(self):
         member = self._make_member()
