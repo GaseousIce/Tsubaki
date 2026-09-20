@@ -6,9 +6,11 @@ Discord auto-mod bot with anti-phishing. Python 3.12+, discord.py, uv.
 
 ```bash
 uv run python src/main.py
-uv run ruff check src/
-uv run ruff format src/
-uv run ruff check --fix src/
+uv run ruff check src/ tests/
+uv run ruff format src/ tests/
+uv run ruff check --fix src/ tests/
+uv run pytest tests/ -q
+uv run pytest -m "not network" -q
 ```
 
 Ruff in `ruff.toml`: 120 width, double quotes, 4-space indent, lint E/F/I.
@@ -21,12 +23,19 @@ Missing Turso vars crash at startup. Missing Groq key gracefully disables `/ask`
 
 ## Structure
 
-- `main.py` — entrypoint. Slash commands: `/hello`, `/ping`, `/ask` (1/5s cooldown), `/clear`, `/antiphishing` (group with subcommands). Syncs tree on startup. Healthcheck daemon thread only when `PORT` set. Logs to `logs/logs.log` (RotatingFileHandler, 5 MB, 3 backups).
+- `main.py` — entrypoint, bot lifecycle (`setup_hook`, `on_ready`), healthcheck daemon thread on `PORT`, fallback on DB failure.
+- `commands.py` — slash commands `/hello`, `/ping`, `/ask` (1/5s cooldown, anime-girl personality).
+- `setup.py` — `/setup` command checking bot permissions, role hierarchy, DB, blacklist, and alert channels.
 - `config.py` — `AppConfig.load()` reads `config.toml`.
-- `db.py` — Turso/libsql client. `migrate()` creates 4 tables; must be called first in `setup_hook()`.
+- `db.py` — Turso/libsql client. `migrate()` creates 4 tables (`guild_configs`, `detection_log`, `custom_blocklist`, `typosquat_patterns`) and migrates `content` and `attachments` columns on `detection_log`. In-memory config cache with eviction.
 - `groq_service.py` — `GroqAskService` wraps `AsyncGroq`. Temp 0.8, max 500 tokens. Anime-girl system prompt.
-- `channel_clear.py` — `/clear` command + daily 3AM auto-clear via `tasks.loop`.
-- `anti_phishing/` — 7 files. Detection pipeline: (1) official + custom blacklist, (2) typosquat patterns, (3) rate-limit heuristic (3+ channels in 10s). On hit: delete → DM → punish (timeout/kick/ban/warn) → alert mod channels. Per-guild config in DB. Rate-limit in-memory, prunes hourly.
+- `channel_clear.py` — `/clear` command (supports `limit`, `user`, `bots_only`) + daily 3AM auto-clear via `tasks.loop`.
+- `anti_phishing/` — 5 files:
+  - `__init__.py`: setup, event listeners, background tasks (`prune_rate_limits`, `recover_database`), command group (`settings`, `stats`).
+  - `actions.py`: detection handling, in-memory attachment caching & re-upload, user DM, punishment (`timeout`/`kick`/`ban`/`warn`), mod alerts with content & embed previews, interactive buttons (`PhishingAlertView`).
+  - `commands.py`: `/antiphishing settings` dashboard and `/antiphishing stats`.
+  - `domain.py`: URL extraction from text, embeds, and attachments; official blacklist fetching, typosquatting checks.
+  - `rate_limit.py`: multi-channel link spam tracker (3+ channels in 10s), hourly stale entry pruning.
 
 ## Intents
 

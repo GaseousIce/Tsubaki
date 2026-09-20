@@ -8,12 +8,13 @@ Tsubaki is a compact Discord auto-moderation bot with anti-phishing, channel cle
 
 Incoming messages are checked before links can spread through a server:
 
-1. Extract URLs from message content and embeds.
+1. Extract URLs from message content, embeds (titles, descriptions, fields, and footers), and attachment descriptions.
 2. Match domains against the official Discord phishing and suspicious-domain lists.
 3. Match against the global custom blocklist stored in Turso/libSQL and shared by every server using the database.
 4. Scan configured typosquat patterns.
 5. Detect link spam across 3+ unique channels within 10 seconds.
-6. Delete the message, DM the user, log the detection, apply the configured action, and alert configured moderator channels.
+6. Delete the message, DM the user with recovery guidance, apply the configured action, and log the detection (including message text and attachment URLs) to Turso.
+7. Alert configured moderator channels with interactive action buttons, deleted message text, embed previews, and byte-cached re-uploaded attachment evidence.
 
 Supported actions are `timeout`, `kick`, `ban`, and `warn`. Defaults are enabled anti-phishing, a 7-day timeout, no alert channels, no mod roles, no bypass role, and the built-in recovery DM.
 
@@ -26,7 +27,7 @@ Supported actions are `timeout`, `kick`, `ban`, and `warn`. Defaults are enabled
 | `/ask <question>` | None | Ask Groq with a 1 request / 5 second per-user cooldown. Disabled when `GROQ_API_KEY` is missing. |
 | `/clear [limit] [user] [bots_only]` | Manage Messages | Delete messages in the current channel with optional filters. |
 | `/setup` | Administrator | Run database, blacklist, role, permission, action, and alert-channel checks. |
-| `/antiphishing settings` | Administrator | Open interactive anti-phishing settings dashboard. |
+| `/antiphishing settings` | Administrator | Open interactive anti-phishing settings dashboard (action, timeout duration, roles, alert channels, custom DM). |
 | `/antiphishing stats` | Administrator | Show detection totals, top blocked domains, and the latest detection. |
 
 ### Optional automation
@@ -82,6 +83,7 @@ uv run ruff format src/ tests/
 uv run ruff check --fix src/ tests/
 uv run pytest tests/ -q
 uv run pytest tests/anti_phishing/ -q
+uv run pytest -m "not network" -q
 ```
 
 Ruff uses a 120-character line length, double quotes, 4-space indents, and E/F/I lint rules.
@@ -91,15 +93,22 @@ Ruff uses a 120-character line length, double quotes, 4-space indents, and E/F/I
 ```text
 Tsubaki/
 ├── src/
-│   ├── main.py              # Entrypoint, bot setup, healthcheck server
+│   ├── main.py              # Entrypoint, bot lifecycle, healthcheck server
 │   ├── commands.py          # /hello, /ping, /ask commands
 │   ├── setup.py             # /setup health and permissions check
 │   ├── channel_clear.py     # /clear and optional daily purge
 │   ├── config.py            # config.toml loader
 │   ├── db.py                # Turso/libSQL client, migrations, CRUD helpers
 │   ├── groq_service.py      # Groq /ask client wrapper
-│   └── anti_phishing/       # Detection pipeline, commands, actions, domain checks
-├── tests/                   # Pytest and SimCord tests
+│   └── anti_phishing/       # Detection pipeline, interactive UI, actions, domains
+│       ├── __init__.py      # Listener setup, background tasks, slash group
+│       ├── actions.py       # Detection handler, attachment re-upload, mod alerts
+│       ├── commands.py      # /antiphishing settings dashboard and stats
+│       ├── domain.py        # URL parsing, official list fetching, typosquatting
+│       └── rate_limit.py    # Channel-spread rate limiter and auto-pruning
+├── tests/                   # Pytest and SimCord unit & integration tests
+│   ├── anti_phishing/       # Anti-phishing action, command, and domain tests
+│   └── conftest.py          # SimCord fixtures, DB mocks, state resets
 ├── config.toml              # Anti-phishing and Groq defaults
 ├── render.yaml              # Render web service blueprint
 ├── ruff.toml                # Ruff configuration

@@ -16,6 +16,7 @@ uv run ruff format src/ tests/
 uv run ruff check --fix src/ tests/
 uv run pytest tests/ -q
 uv run pytest tests/anti_phishing/ -q
+uv run pytest -m "not network" -q
 ```
 
 ## Setup
@@ -26,16 +27,19 @@ Missing Turso vars crash at startup (`ValueError`). Missing Groq key gracefully 
 
 ## Architecture
 
-- `src/main.py` — entrypoint. Slash commands: `/hello`, `/ping`, `/ask` (1/5s cooldown), `/clear`, `/antiphishing` (group with subcommands). Syncs command tree on every startup. Healthcheck server daemon thread only when `PORT` set. Logs to `logs/logs.log` via `RotatingFileHandler` (5 MB, 3 backups).
+- `src/main.py` — entrypoint and bot lifecycle (`setup_hook`, `on_ready`). Syncs command tree on every startup. Healthcheck server daemon thread only when `PORT` set. Recovers gracefully if DB migration fails at startup. Logs to `logs/logs.log` via `RotatingFileHandler` (5 MB, 3 backups).
+- `src/commands.py` — basic and AI slash commands: `/hello`, `/ping`, `/ask` (1/5s cooldown, anime-girl personality, graceful fallback when `GROQ_API_KEY` missing).
+- `src/setup.py` — `/setup` slash command (administrator only) checking bot role position, guild permissions, action readiness, alert channel permissions, DB connectivity, and official blacklist status.
 - `src/config.py` — `AppConfig.load()` reads `config.toml` for `[anti_phishing]` and `[groq]` sections. Pure dataclasses.
-- `src/db.py` — Turso/libsql client. `migrate()` creates 4 tables (guild_configs, detection_log, custom_blocklist, typosquat_patterns). Must be called first in `setup_hook()`.
+- `src/db.py` — Turso/libsql client. `migrate()` creates 4 tables (`guild_configs`, `detection_log`, `custom_blocklist`, `typosquat_patterns`) and dynamically migrates `content` and `attachments` columns on `detection_log`. In-memory guild config cache with eviction. `log_detection()` stores full message text and attachment URLs. Must be called first in `setup_hook()`.
 - `src/groq_service.py` — `GroqAskService` wraps `AsyncGroq`. Temp 0.8, max 500 tokens. Anime-girl personality system prompt. Model priority: `GROQ_MODEL` env var > constructor arg > config.toml > default `openai/gpt-oss-120b`.
-- `src/channel_clear.py` — `/clear` slash command + optional daily auto-clear at 3AM (via `CLEAR_CHANNEL_ID`). Uses `tasks.loop`.
-- `src/anti_phishing/` — 7 files:
-  - `__init__.py` — `setup()` registers `on_message` listener and `/antiphishing` command group; `fetch_official_blacklist()` fetches from discord-phishing-links GitHub repo.
-  - Detection pipeline: (1) official + custom blacklist → (2) typosquat pattern scan → (3) rate-limit heuristic (3+ unique channels with links in 10s). On hit: delete message, DM user, punish (timeout/kick/ban/warn), alert mod channels with interactive buttons.
-  - Per-guild config stored in DB (enabled, action, timeout_duration, alert_channels, mod_roles, bypass_role, dm_message). Default: enabled, timeout 7d, no alerts.
-  - Rate-limit uses in-memory dict (no Redis); auto-prunes stale entries hourly.
+- `src/channel_clear.py` — `/clear` slash command (Manage Messages, optional `limit`, `user`, `bots_only` filters) + optional daily auto-clear at 3AM (via `CLEAR_CHANNEL_ID`). Uses `tasks.loop`.
+- `src/anti_phishing/` — 5 files:
+  - `__init__.py` — `setup()` registers `on_message` listener, `on_ready` / `on_guild_join` lifecycle handlers, periodic background tasks (`prune_rate_limits`, `recover_database`), and `/antiphishing` command group (`settings`, `stats`); `fetch_official_blacklist()` fetches from discord-phishing-links GitHub repo with exponential backoff.
+  - `actions.py` — detection pipeline execution: in-memory byte caching of attachments before message deletion, DB logging with content and attachments, user recovery DM, punishment execution (`timeout`/`kick`/`ban`/`warn`), and moderator alerts with message previews, embed summaries, and re-uploaded attachment evidence. `PhishingAlertView` provides interactive action buttons (False Positive, Ban, Timeout, Unban).
+  - `commands.py` — `/antiphishing settings` (interactive UI dashboard `SettingsDashboardView` with dropdown selects for action, timeout duration, alert channels, mod roles, bypass role, and modal for custom DM) and `/antiphishing stats` (detection breakdown).
+  - `domain.py` — URL extraction from text, embed fields/titles/descriptions/footers/authors, and attachment descriptions. Domain normalization, official blacklist fetching, custom blocklist matching, and typosquatting regex scanning.
+  - `rate_limit.py` — in-memory tracker detecting multi-channel link spreading (3+ unique channels with links in 10s); hourly auto-pruning task cleans stale entries.
 
 ## Intents
 
@@ -48,6 +52,7 @@ Default + `members=True` + `message_content=True` (required for anti-phishing). 
 - `mock_db` fixture also sets `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` env vars so `db.get_db()` doesn't raise.
 - `src/main.py` is never imported in tests — fresh `commands.Bot` instances are created via `simcord_bot` fixture, with anti-phishing + channel-clear registered.
 - `simcord.assert_error` is required after slash commands that trigger `app_commands.checks` to mark expected errors as inspected.
+- Pytest `network` marker (`@pytest.mark.network`) flags tests requiring live external network access (e.g. GitHub blacklist fetches). Run `pytest -m "not network"` for fast offline testing.
 
 ## Gotchas
 
