@@ -55,15 +55,34 @@ async def fetch_blacklist(retries: int = 3) -> set[str]:
     return merged
 
 
-def extract_urls(text: str, embeds=None) -> list[str]:
+def extract_urls(text: str, embeds=None, attachments=None) -> list[str]:
     raw = list(_URL_RE.findall(text or ""))
 
     if embeds:
         for embed in embeds:
-            if embed.url:
+            if getattr(embed, "url", None):
                 raw.append(embed.url)
-            if embed.description:
+            if getattr(embed, "description", None):
                 raw.extend(_URL_RE.findall(embed.description))
+            if getattr(embed, "title", None):
+                raw.extend(_URL_RE.findall(embed.title))
+            for field in getattr(embed, "fields", []):
+                if getattr(field, "name", None):
+                    raw.extend(_URL_RE.findall(field.name))
+                if getattr(field, "value", None):
+                    raw.extend(_URL_RE.findall(field.value))
+            footer = getattr(embed, "footer", None)
+            if footer and getattr(footer, "text", None):
+                raw.extend(_URL_RE.findall(footer.text))
+            author = getattr(embed, "author", None)
+            if author and getattr(author, "url", None):
+                raw.append(author.url)
+
+    if attachments:
+        for attachment in attachments:
+            desc = getattr(attachment, "description", None)
+            if desc:
+                raw.extend(_URL_RE.findall(desc))
 
     seen: set[str] = set()
     result: list[str] = []

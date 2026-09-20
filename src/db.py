@@ -36,6 +36,8 @@ async def migrate() -> None:
         "guild_id TEXT NOT NULL, "
         "domain TEXT NOT NULL, "
         "reason TEXT NOT NULL, "
+        "content TEXT, "
+        "attachments TEXT, "
         "timestamp TEXT NOT NULL DEFAULT (datetime('now')))"
     )
     await db.execute(
@@ -44,6 +46,13 @@ async def migrate() -> None:
         "added_at TEXT NOT NULL DEFAULT (datetime('now')), "
         "source TEXT NOT NULL)"
     )
+    table_info = await db.execute("PRAGMA table_info(detection_log)")
+    existing_cols = {row[1] for row in table_info.rows} if table_info.rows else set()
+    if existing_cols:
+        if "content" not in existing_cols:
+            await db.execute("ALTER TABLE detection_log ADD COLUMN content TEXT")
+        if "attachments" not in existing_cols:
+            await db.execute("ALTER TABLE detection_log ADD COLUMN attachments TEXT")
 
 
 DEFAULT_GUILD_CONFIG = {
@@ -119,11 +128,21 @@ async def update_guild_config(guild_id: int, **kwargs) -> dict:
 # --- Detection log / stats ---
 
 
-async def log_detection(guild_id: int, domain: str, reason: str) -> None:
+async def log_detection(
+    guild_id: int,
+    domain: str,
+    reason: str,
+    content: str | None = None,
+    attachments: list[str] | str | None = None,
+) -> None:
     db = await get_db()
+    if isinstance(attachments, list):
+        attachments_str = json.dumps(attachments)
+    else:
+        attachments_str = attachments
     await db.execute(
-        "INSERT INTO detection_log (guild_id, domain, reason) VALUES (?, ?, ?)",
-        (str(guild_id), domain, reason),
+        "INSERT INTO detection_log (guild_id, domain, reason, content, attachments) VALUES (?, ?, ?, ?, ?)",
+        (str(guild_id), domain, reason, content, attachments_str),
     )
 
 

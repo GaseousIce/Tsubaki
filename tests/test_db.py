@@ -43,6 +43,21 @@ class TestMigrate:
         await db.migrate()
         assert mock_db.execute.call_count >= 6
 
+    async def test_migrate_adds_missing_columns(self, mock_db):
+        # Simulate an existing table with only the old columns
+        mock_db.execute.side_effect = [
+            MagicMock(),  # CREATE TABLE guild_configs
+            MagicMock(),  # CREATE TABLE detection_log
+            MagicMock(),  # CREATE TABLE custom_blocklist
+            make_mock_rows([(0, "id"), (1, "guild_id"), (2, "domain"), (3, "reason"), (4, "timestamp")]),  # PRAGMA
+            MagicMock(),  # ALTER TABLE content
+            MagicMock(),  # ALTER TABLE attachments
+        ]
+        await db.migrate()
+        executed_sqls = [c[0][0] for c in mock_db.execute.call_args_list]
+        assert any("ADD COLUMN content" in sql for sql in executed_sqls)
+        assert any("ADD COLUMN attachments" in sql for sql in executed_sqls)
+
 
 class TestAntiPhishingConfig:
     async def test_update_guild_config_merges_and_persists(self, mock_db):
@@ -106,7 +121,24 @@ class TestDetectionLog:
     async def test_log_detection(self, mock_db):
         await db.log_detection(12345, "evil.com", "official_blacklist")
         call_args = mock_db.execute.call_args
-        assert call_args[0][1] == ("12345", "evil.com", "official_blacklist")
+        assert call_args[0][1] == ("12345", "evil.com", "official_blacklist", None, None)
+
+    async def test_log_detection_with_content_and_attachments(self, mock_db):
+        await db.log_detection(
+            12345,
+            "evil.com",
+            "rate_limit",
+            content="Check this image!",
+            attachments=["https://cdn.discordapp.com/1.png"],
+        )
+        call_args = mock_db.execute.call_args
+        assert call_args[0][1] == (
+            "12345",
+            "evil.com",
+            "rate_limit",
+            "Check this image!",
+            '["https://cdn.discordapp.com/1.png"]',
+        )
 
     async def test_get_stats_empty(self, mock_db):
         stats = await db.get_stats(12345)

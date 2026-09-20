@@ -50,6 +50,28 @@ class TestExtractUrls:
         result = domain.extract_urls("", embeds=[FakeEmbed()])
         assert "https://desc.com/page" in result
 
+    def test_url_from_attachment_description(self):
+        class FakeAttachment:
+            description = "Scan QR code or click https://qr-phish.xyz/claim"
+
+        result = domain.extract_urls("", attachments=[FakeAttachment()])
+        assert "https://qr-phish.xyz/claim" in result
+
+    def test_url_from_embed_title_and_fields(self):
+        class FakeField:
+            name = "Link"
+            value = "Claim at https://field-url.com"
+
+        class FakeEmbed:
+            title = "Free gift https://title-url.com"
+            fields = [FakeField()]
+            url = None
+            description = None
+
+        result = domain.extract_urls("", embeds=[FakeEmbed()])
+        assert "https://title-url.com" in result
+        assert "https://field-url.com" in result
+
 
 class TestExtractHostnames:
     def test_standard_url(self):

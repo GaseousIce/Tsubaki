@@ -1,4 +1,5 @@
 import datetime
+import io
 import logging
 
 import discord
@@ -227,10 +228,70 @@ async def handle_detection(
             logger.warning("User %s not found in guild %s — cannot punish", message.author.id, guild.id)
             return
 
+    # Extract attachments before message deletion
+    cached_attachments: list[tuple[str, bytes | discord.File]] = []
+    attachment_urls: list[str] = []
+    for att in getattr(message, "attachments", [])[:5]:
+        attachment_urls.append(att.url)
+        try:
+            size = getattr(att, "size", 0) or 0
+            if size <= 8 * 1024 * 1024:
+                fname = getattr(att, "filename", "attachment")
+                read_data = None
+                if hasattr(att, "read"):
+                    try:
+                        data = await att.read()
+                        if isinstance(data, bytes):
+                            read_data = data
+                    except Exception:
+                        read_data = None
+                if read_data is not None:
+                    cached_attachments.append((fname, read_data))
+                elif hasattr(att, "to_file"):
+                    f = await att.to_file()
+                    if f:
+                        cached_attachments.append((fname, f))
+        except Exception as exc:
+            logger.warning("Could not read attachment %s: %s", getattr(att, "filename", "unknown"), exc)
+
+    # Extract embed details
+    embed_summaries = []
+    embed_images = []
+    for i, emb in enumerate(getattr(message, "embeds", [])[:3], start=1):
+        parts = []
+        if getattr(emb, "title", None):
+            parts.append(f"**Title:** {emb.title}")
+        if getattr(emb, "description", None):
+            desc = emb.description if len(emb.description) <= 300 else emb.description[:297] + "..."
+            parts.append(f"**Description:** {desc}")
+        if getattr(emb, "url", None):
+            parts.append(f"**URL:** {emb.url}")
+        for f in getattr(emb, "fields", [])[:3]:
+            parts.append(f"• **{f.name}:** {f.value[:100]}")
+        img_url = getattr(getattr(emb, "image", None), "url", None)
+        thumb_url = getattr(getattr(emb, "thumbnail", None), "url", None)
+        if img_url:
+            parts.append(f"**Image:** [Link]({img_url})")
+            embed_images.append(img_url)
+        elif thumb_url:
+            parts.append(f"**Thumbnail:** [Link]({thumb_url})")
+            embed_images.append(thumb_url)
+        if parts:
+            embed_summaries.append(f"__Embed #{i}__\n" + "\n".join(parts))
+
+    combined_content = message.content or ("\n\n".join(embed_summaries) if embed_summaries else None)
+    all_attachments = attachment_urls + embed_images
+
     # 1. Log to DB when it is available.
     if persist:
         try:
-            await db.log_detection(guild.id, url or "unknown", reason)
+            await db.log_detection(
+                guild.id,
+                url or "unknown",
+                reason,
+                content=combined_content,
+                attachments=all_attachments,
+            )
         except Exception as exc:
             logger.warning("DB log_detection failed: %s", exc)
 
@@ -296,21 +357,70 @@ async def handle_detection(
         )
         alert_embed.set_footer(text=f"Guild: {guild.name}")
 
+        content_text = getattr(message, "content", "") or ""
+        if content_text:
+            preview = content_text if len(content_text) <= 1000 else content_text[:997] + "..."
+            alert_embed.add_field(name="Message Content", value=preview, inline=False)
+        elif embed_summaries:
+            alert_embed.add_field(name="Message Content", value="*(Content in Embeds below)*", inline=False)
+        else:
+            alert_embed.add_field(name="Message Content", value="*(No text content)*", inline=False)
+
+        if embed_summaries:
+            embed_text = "\n\n".join(embed_summaries)
+            if len(embed_text) > 1024:
+                embed_text = embed_text[:1021] + "..."
+            alert_embed.add_field(
+                name=f"Original Embeds ({len(message.embeds)})",
+                value=embed_text,
+                inline=False,
+            )
+
+        attachments_list = getattr(message, "attachments", [])
+        if attachments_list:
+            att_lines = [f"• [{a.filename}]({a.url})" for a in attachments_list[:5]]
+            if len(attachments_list) > 5:
+                att_lines.append(f"*(and {len(attachments_list) - 5} more)*")
+            alert_embed.add_field(
+                name=f"Attachments ({len(attachments_list)})",
+                value="\n".join(att_lines),
+                inline=False,
+            )
+
+        # If no files can be re-uploaded directly, set fallback image on alert embed
+        if not cached_attachments:
+            if attachments_list:
+                first_att = attachments_list[0]
+                filename = getattr(first_att, "filename", "").lower()
+                if any(filename.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".webp", ".gif")):
+                    alert_embed.set_image(url=first_att.url)
+            elif embed_images:
+                alert_embed.set_image(url=embed_images[0])
+
         for channel_id in alert_channels:
             ch = guild.get_channel(channel_id)
             if ch is None:
                 continue
             try:
                 view = PhishingAlertView(member, url, action, guild_cfg)
-                await ch.send(content=ping_str or None, embed=alert_embed, view=view)
+                if cached_attachments:
+                    files_to_send = [
+                        discord.File(io.BytesIO(item), filename=fn) if isinstance(item, bytes) else item
+                        for fn, item in cached_attachments
+                    ]
+                    await ch.send(content=ping_str or None, embed=alert_embed, view=view, files=files_to_send)
+                else:
+                    await ch.send(content=ping_str or None, embed=alert_embed, view=view)
             except discord.Forbidden:
                 logger.warning("Cannot send alert to channel %s in guild %s", channel_id, guild.id)
 
     logger.info(
-        "Anti-phishing action=%s url=%s reason=%s user=%s guild=%s",
+        "Anti-phishing action=%s url=%s reason=%s user=%s guild=%s content=%r attachments=%r",
         action,
         url,
         reason,
         member.id,
         guild.id,
+        getattr(message, "content", ""),
+        all_attachments,
     )

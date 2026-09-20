@@ -70,7 +70,7 @@ def setup(
 
         # 1. Extract URLs and check blacklists.
         try:
-            extracted_urls = domain.extract_urls(message.content, message.embeds)
+            extracted_urls = domain.extract_urls(message.content, message.embeds, message.attachments)
         except Exception as exc:
             logger.exception("Failed to extract URLs from message: %s", exc)
             extracted_urls = []
