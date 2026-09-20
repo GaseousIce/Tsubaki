@@ -231,11 +231,15 @@ async def handle_detection(
     # Extract attachments before message deletion
     cached_attachments: list[tuple[str, bytes | discord.File]] = []
     attachment_urls: list[str] = []
+    total_cached_bytes = 0
+    max_total_bytes = 10 * 1024 * 1024  # 10 MB cumulative budget for re-uploading
     for att in getattr(message, "attachments", [])[:5]:
-        attachment_urls.append(att.url)
+        att_url = getattr(att, "url", None)
+        if att_url:
+            attachment_urls.append(att_url)
         try:
             size = getattr(att, "size", 0) or 0
-            if size <= 8 * 1024 * 1024:
+            if size <= 8 * 1024 * 1024 and (total_cached_bytes + size) <= max_total_bytes:
                 fname = getattr(att, "filename", "attachment")
                 read_data = None
                 if hasattr(att, "read"):
@@ -248,10 +252,23 @@ async def handle_detection(
                         read_data = None
                 if read_data is not None:
                     cached_attachments.append((fname, read_data))
+                    total_cached_bytes += len(read_data)
                 elif hasattr(att, "to_file"):
                     f = await att.to_file()
                     if f:
-                        cached_attachments.append((fname, f))
+                        if hasattr(f, "fp") and hasattr(f.fp, "read") and hasattr(f.fp, "seek"):
+                            try:
+                                f.fp.seek(0)
+                                raw = f.fp.read()
+                                if isinstance(raw, bytes) and len(raw) > 0:
+                                    cached_attachments.append((fname, raw))
+                                    total_cached_bytes += len(raw)
+                                else:
+                                    cached_attachments.append((fname, f))
+                            except Exception:
+                                cached_attachments.append((fname, f))
+                        else:
+                            cached_attachments.append((fname, f))
         except Exception as exc:
             logger.warning("Could not read attachment %s: %s", getattr(att, "filename", "unknown"), exc)
 
@@ -379,12 +396,15 @@ async def handle_detection(
 
         attachments_list = getattr(message, "attachments", [])
         if attachments_list:
-            att_lines = [f"• [{a.filename}]({a.url})" for a in attachments_list[:5]]
+            att_lines = [f"• [{getattr(a, 'filename', 'file')}]({getattr(a, 'url', '')})" for a in attachments_list[:5]]
             if len(attachments_list) > 5:
                 att_lines.append(f"*(and {len(attachments_list) - 5} more)*")
+            att_value = "\n".join(att_lines)
+            if len(att_value) > 1024:
+                att_value = att_value[:1021] + "..."
             alert_embed.add_field(
                 name=f"Attachments ({len(attachments_list)})",
-                value="\n".join(att_lines),
+                value=att_value,
                 inline=False,
             )
 
@@ -405,15 +425,38 @@ async def handle_detection(
             try:
                 view = PhishingAlertView(member, url, action, guild_cfg)
                 if cached_attachments:
-                    files_to_send = [
-                        discord.File(io.BytesIO(item), filename=fn) if isinstance(item, bytes) else item
-                        for fn, item in cached_attachments
-                    ]
+                    files_to_send = []
+                    for fn, item in cached_attachments:
+                        if isinstance(item, bytes):
+                            files_to_send.append(discord.File(io.BytesIO(item), filename=fn))
+                        else:
+                            if hasattr(item, "reset"):
+                                try:
+                                    item.reset()
+                                except Exception:
+                                    pass
+                            elif hasattr(getattr(item, "fp", None), "seek"):
+                                try:
+                                    item.fp.seek(0)
+                                except Exception:
+                                    pass
+                            files_to_send.append(item)
                     await ch.send(content=ping_str or None, embed=alert_embed, view=view, files=files_to_send)
                 else:
                     await ch.send(content=ping_str or None, embed=alert_embed, view=view)
             except discord.Forbidden:
                 logger.warning("Cannot send alert to channel %s in guild %s", channel_id, guild.id)
+            except discord.HTTPException as exc:
+                logger.warning(
+                    "Failed to send alert with attachments to channel %s in guild %s: %s; retrying without files",
+                    channel_id,
+                    guild.id,
+                    exc,
+                )
+                try:
+                    await ch.send(content=ping_str or None, embed=alert_embed, view=view)
+                except Exception as retry_exc:
+                    logger.warning("Failed to send fallback alert to channel %s: %s", channel_id, retry_exc)
 
     logger.info(
         "Anti-phishing action=%s url=%s reason=%s user=%s guild=%s content=%r attachments=%r",
