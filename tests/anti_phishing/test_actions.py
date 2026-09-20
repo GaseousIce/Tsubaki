@@ -396,7 +396,13 @@ class TestHandleDetectionActions:
         mock_channel.send.assert_awaited_once()
         call_kwargs = mock_channel.send.call_args.kwargs
         assert call_kwargs["content"] == "<@&111> <@&222>"
-        embed = call_kwargs["embed"]
+        embeds = call_kwargs.get("embeds")
+        embed = embeds[0] if embeds else call_kwargs["embed"]
+        if embeds:
+            assert len(embeds) == 4
+            assert all(e.url == embeds[0].url for e in embeds)
+            for i, e in enumerate(embeds):
+                assert e.image.url == f"https://cdn.discordapp.com/file{i}.png"
         fields = {f.name: f.value for f in embed.fields}
         assert "Attachments (7)" in fields
         assert "*(and 2 more)*" in fields["Attachments (7)"]
@@ -433,7 +439,10 @@ class TestHandleDetectionActions:
         await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
 
         mock_channel.send.assert_awaited_once()
-        embed = mock_channel.send.call_args.kwargs["embed"]
+        embeds = mock_channel.send.call_args.kwargs.get("embeds")
+        embed = embeds[0] if embeds else mock_channel.send.call_args.kwargs["embed"]
+        if embeds:
+            assert len(embeds) == 4
         fields = {f.name: f.value for f in embed.fields}
         assert "Attachments (5)" in fields
         assert len(fields["Attachments (5)"]) <= 1024
@@ -474,7 +483,13 @@ class TestHandleDetectionActions:
 
         mock_channel.send.assert_awaited_once()
         assert "files" not in mock_channel.send.call_args.kwargs
-        embed = mock_channel.send.call_args.kwargs["embed"]
+        embeds = mock_channel.send.call_args.kwargs.get("embeds")
+        embed = embeds[0] if embeds else mock_channel.send.call_args.kwargs["embed"]
+        if embeds:
+            assert len(embeds) == 2
+            assert embeds[0].image.url == "https://cdn.discordapp.com/file1.png"
+            assert embeds[1].image.url == "https://cdn.discordapp.com/file2.png"
+            assert embeds[0].url == embeds[1].url
         fields = {f.name: f.value for f in embed.fields}
         assert "Attachments (2)" in fields
         assert "file1.png" in fields["Attachments (2)"]
@@ -549,6 +564,138 @@ class TestHandleDetectionActions:
         member.timeout.assert_awaited_once()
         message.delete.assert_awaited_once()
         mock_channel.send.assert_awaited_once()
+
+    async def test_alert_channel_attachment_grid_three_images(self, mock_db):
+        message = self._make_mock_message()
+        attachments = []
+        for i in range(3):
+            att = MagicMock(spec=discord.Attachment)
+            att.filename = f"image_{i}.jpg"
+            att.url = f"https://cdn.discordapp.com/image_{i}.jpg"
+            attachments.append(att)
+        message.attachments = attachments
+
+        member = self._make_mock_member()
+        mock_channel = MagicMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock()
+        message.guild.get_channel = MagicMock(return_value=mock_channel)
+
+        guild_cfg = {"action": "timeout", "alert_channels": [789]}
+        await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
+
+        mock_channel.send.assert_awaited_once()
+        embeds = mock_channel.send.call_args.kwargs["embeds"]
+        assert len(embeds) == 3
+        assert embeds[0].title == "⚠️ Phishing Detected"
+        assert embeds[0].image.url == "https://cdn.discordapp.com/image_0.jpg"
+        gallery_url = embeds[0].url
+        assert gallery_url.startswith("https://discord.com")
+        for i, emb in enumerate(embeds):
+            assert emb.url == gallery_url
+            assert emb.image.url == f"https://cdn.discordapp.com/image_{i}.jpg"
+
+    async def test_alert_channel_attachment_grid_caps_at_four(self, mock_db):
+        message = self._make_mock_message()
+        attachments = []
+        for i in range(6):
+            att = MagicMock(spec=discord.Attachment)
+            att.filename = f"pic_{i}.png"
+            att.url = f"https://cdn.discordapp.com/pic_{i}.png"
+            attachments.append(att)
+        message.attachments = attachments
+
+        member = self._make_mock_member()
+        mock_channel = MagicMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock()
+        message.guild.get_channel = MagicMock(return_value=mock_channel)
+
+        guild_cfg = {"action": "timeout", "alert_channels": [789]}
+        await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
+
+        mock_channel.send.assert_awaited_once()
+        embeds = mock_channel.send.call_args.kwargs["embeds"]
+        assert len(embeds) == 4
+        gallery_url = embeds[0].url
+        for i in range(4):
+            assert embeds[i].url == gallery_url
+            assert embeds[i].image.url == f"https://cdn.discordapp.com/pic_{i}.png"
+
+    async def test_alert_channel_non_image_attachments_single_embed(self, mock_db):
+        message = self._make_mock_message()
+        att1 = MagicMock(spec=discord.Attachment)
+        att1.filename = "script.py"
+        att1.url = "https://cdn.discordapp.com/script.py"
+        att2 = MagicMock(spec=discord.Attachment)
+        att2.filename = "document.pdf"
+        att2.url = "https://cdn.discordapp.com/document.pdf"
+        message.attachments = [att1, att2]
+
+        member = self._make_mock_member()
+        mock_channel = MagicMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock()
+        message.guild.get_channel = MagicMock(return_value=mock_channel)
+
+        guild_cfg = {"action": "timeout", "alert_channels": [789]}
+        await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
+
+        mock_channel.send.assert_awaited_once()
+        assert "embeds" not in mock_channel.send.call_args.kwargs
+        embed = mock_channel.send.call_args.kwargs["embed"]
+        assert embed.image.url is None
+
+    async def test_alert_channel_mixed_images_and_non_images(self, mock_db):
+        message = self._make_mock_message()
+        att1 = MagicMock(spec=discord.Attachment)
+        att1.filename = "photo.png"
+        att1.url = "https://cdn.discordapp.com/photo.png"
+        att2 = MagicMock(spec=discord.Attachment)
+        att2.filename = "archive.zip"
+        att2.url = "https://cdn.discordapp.com/archive.zip"
+        message.attachments = [att1, att2]
+
+        member = self._make_mock_member()
+        mock_channel = MagicMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock()
+        message.guild.get_channel = MagicMock(return_value=mock_channel)
+
+        guild_cfg = {"action": "timeout", "alert_channels": [789]}
+        await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
+
+        mock_channel.send.assert_awaited_once()
+        assert "embed" in mock_channel.send.call_args.kwargs
+        embed = mock_channel.send.call_args.kwargs["embed"]
+        assert embed.image.url == "https://cdn.discordapp.com/photo.png"
+
+    async def test_alert_channel_fills_grid_from_embed_images(self, mock_db):
+        message = self._make_mock_message()
+        att = MagicMock(spec=discord.Attachment)
+        att.filename = "evidence.png"
+        att.url = "https://cdn.discordapp.com/evidence.png"
+        message.attachments = [att]
+
+        fake_embed = MagicMock(spec=discord.Embed)
+        fake_embed.title = "Embed Title"
+        fake_embed.description = "Embed Desc"
+        fake_embed.url = None
+        fake_embed.fields = []
+        fake_embed.image = MagicMock(url="https://scam.xyz/banner1.png")
+        fake_embed.thumbnail = None
+        message.embeds = [fake_embed]
+
+        member = self._make_mock_member()
+        mock_channel = MagicMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock()
+        message.guild.get_channel = MagicMock(return_value=mock_channel)
+
+        guild_cfg = {"action": "timeout", "alert_channels": [789]}
+        await handle_detection(message, member, guild_cfg, "https://evil.com", "official_blacklist")
+
+        mock_channel.send.assert_awaited_once()
+        embeds = mock_channel.send.call_args.kwargs["embeds"]
+        assert len(embeds) == 2
+        assert embeds[0].image.url == "https://cdn.discordapp.com/evidence.png"
+        assert embeds[1].image.url == "https://scam.xyz/banner1.png"
+        assert embeds[0].url == embeds[1].url
 
 
 class TestPhishingAlertViewCallbacks:
@@ -684,3 +831,21 @@ class TestPhishingAlertViewCallbacks:
 
         assert result is False
         interaction.response.send_message.assert_awaited_once()
+
+    async def test_callbacks_preserve_all_gallery_embeds(self):
+        member = self._make_member()
+        member.edit = AsyncMock()
+
+        view = PhishingAlertView(member, "https://evil.com", "timeout", {"mod_roles": []})
+        interaction = self._make_interaction()
+        embed1 = discord.Embed(title="Alert", url="https://discord.com")
+        embed2 = discord.Embed(url="https://discord.com")
+        interaction.message.embeds = [embed1, embed2]
+
+        await view.pardon_callback(interaction)
+
+        interaction.message.edit.assert_awaited_once()
+        edited_embeds = interaction.message.edit.call_args.kwargs["embeds"]
+        assert len(edited_embeds) == 2
+        assert "Pardoned by" in edited_embeds[0].description
+        assert edited_embeds[1].url == "https://discord.com"

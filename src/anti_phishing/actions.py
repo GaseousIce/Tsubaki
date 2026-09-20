@@ -9,6 +9,31 @@ logger = logging.getLogger("discord")
 
 _PARSE_UNITS = {"d": 86400, "w": 604800}
 _MAX_TIMEOUT_SECONDS = 2419200  # 28 days
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+
+
+def _is_image_attachment(att: discord.Attachment) -> bool:
+    ct = getattr(att, "content_type", None)
+    if isinstance(ct, str) and ct.startswith("image/"):
+        return True
+    filename = getattr(att, "filename", None)
+    if isinstance(filename, str):
+        return any(filename.lower().endswith(ext) for ext in _IMAGE_EXTS)
+    return False
+
+
+def _resolve_gallery_url(message: discord.Message) -> str:
+    raw_jump = getattr(message, "jump_url", None)
+    if isinstance(raw_jump, str) and raw_jump.startswith("http"):
+        return raw_jump
+    guild = getattr(message, "guild", None)
+    guild_id = getattr(guild, "id", None)
+    channel = getattr(message, "channel", None)
+    channel_id = getattr(channel, "id", None)
+    msg_id = getattr(message, "id", None)
+    if isinstance(guild_id, (int, str)) and isinstance(channel_id, (int, str)) and isinstance(msg_id, (int, str)):
+        return f"https://discord.com/channels/{guild_id}/{channel_id}/{msg_id}"
+    return "https://discord.com"
 
 
 def _parse_duration(duration: str) -> int:
@@ -158,12 +183,14 @@ class PhishingAlertView(discord.ui.View):
         try:
             await self.member.edit(timed_out_until=None, reason=f"Phishing pardon by {interaction.user}")
 
-            embed = interaction.message.embeds[0]
-            embed.color = discord.Color.green()
-            embed.description += f"\n\n✅ **Pardoned by:** {interaction.user.mention}"
+            embeds = list(interaction.message.embeds)
+            if embeds:
+                embeds[0].color = discord.Color.green()
+                desc = embeds[0].description or ""
+                embeds[0].description = f"{desc}\n\n✅ **Pardoned by:** {interaction.user.mention}".strip()
 
             self.pardon_button.disabled = True
-            await interaction.message.edit(embed=embed, view=self)
+            await interaction.message.edit(embeds=embeds, view=self)
             await interaction.followup.send(
                 f"✅ {self.member.mention} has been pardoned (timeout removed).", ephemeral=True
             )
@@ -178,13 +205,15 @@ class PhishingAlertView(discord.ui.View):
         try:
             await self.member.ban(reason=f"Phishing manual ban by {interaction.user}")
 
-            embed = interaction.message.embeds[0]
-            embed.color = discord.Color.red()
-            embed.description += f"\n\n🔨 **Banned by:** {interaction.user.mention}"
+            embeds = list(interaction.message.embeds)
+            if embeds:
+                embeds[0].color = discord.Color.red()
+                desc = embeds[0].description or ""
+                embeds[0].description = f"{desc}\n\n🔨 **Banned by:** {interaction.user.mention}".strip()
 
             self.ban_button.disabled = True
             self.pardon_button.disabled = True
-            await interaction.message.edit(embed=embed, view=self)
+            await interaction.message.edit(embeds=embeds, view=self)
             await interaction.followup.send(f"🔨 {self.member.mention} has been banned.", ephemeral=True)
         except discord.Forbidden:
             await interaction.followup.send("❌ I do not have permission to ban this member.", ephemeral=True)
@@ -200,18 +229,18 @@ class PhishingAlertView(discord.ui.View):
 
         try:
             removed = await db.remove_from_blocklist(self.url)
-            embed = interaction.message.embeds[0]
-            embed.color = discord.Color.blue()
-
-            if removed:
-                embed.description += (
-                    f"\n\n🔓 **URL Allowed by:** {interaction.user.mention} (Removed from custom blocklist)"
-                )
-            else:
-                embed.description += f"\n\n🔓 **URL Allowed by:** {interaction.user.mention}"
+            embeds = list(interaction.message.embeds)
+            if embeds:
+                embeds[0].color = discord.Color.blue()
+                desc = embeds[0].description or ""
+                if removed:
+                    status = f"🔓 **URL Allowed by:** {interaction.user.mention} (Removed from custom blocklist)"
+                else:
+                    status = f"🔓 **URL Allowed by:** {interaction.user.mention}"
+                embeds[0].description = f"{desc}\n\n{status}".strip()
 
             self.allow_button.disabled = True
-            await interaction.message.edit(embed=embed, view=self)
+            await interaction.message.edit(embeds=embeds, view=self)
             await interaction.followup.send(f"🔓 URL `{self.url}` has been whitelisted/allowed.", ephemeral=True)
         except Exception as e:
             logger.exception("Allow URL callback failed")
@@ -381,15 +410,29 @@ async def handle_detection(
                 inline=False,
             )
 
-        if attachments_list:
-            first_att = attachments_list[0]
-            filename = getattr(first_att, "filename", "").lower()
-            if any(filename.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".webp", ".gif")):
-                att_url = getattr(first_att, "url", None)
-                if att_url:
-                    alert_embed.set_image(url=att_url)
-        elif embed_images:
-            alert_embed.set_image(url=embed_images[0])
+        # Collect image URLs for visual display in an image grid (up to 4 images max for Discord gallery)
+        image_urls: list[str] = [
+            att.url for att in attachments_list if getattr(att, "url", None) and _is_image_attachment(att)
+        ]
+        if len(image_urls) < 4 and embed_images:
+            for e_url in embed_images:
+                if e_url not in image_urls:
+                    image_urls.append(e_url)
+                if len(image_urls) >= 4:
+                    break
+
+        alert_embeds = [alert_embed]
+        if image_urls:
+            if len(image_urls) == 1:
+                alert_embed.set_image(url=image_urls[0])
+            else:
+                gallery_url = _resolve_gallery_url(message)
+                alert_embed.url = gallery_url
+                alert_embed.set_image(url=image_urls[0])
+                for extra_url in image_urls[1:4]:
+                    sub_embed = discord.Embed(url=gallery_url)
+                    sub_embed.set_image(url=extra_url)
+                    alert_embeds.append(sub_embed)
 
         for channel_id in alert_channels:
             ch = guild.get_channel(channel_id)
@@ -397,7 +440,10 @@ async def handle_detection(
                 continue
             try:
                 view = PhishingAlertView(member, url, action, guild_cfg, author_id=message.author.id)
-                await ch.send(content=ping_str or None, embed=alert_embed, view=view)
+                if len(alert_embeds) > 1:
+                    await ch.send(content=ping_str or None, embeds=alert_embeds, view=view)
+                else:
+                    await ch.send(content=ping_str or None, embed=alert_embed, view=view)
             except discord.Forbidden:
                 logger.warning("Cannot send alert to channel %s in guild %s", channel_id, guild.id)
             except discord.HTTPException as exc:
