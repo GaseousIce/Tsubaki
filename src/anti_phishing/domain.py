@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import re
+from collections.abc import Sequence
+from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
@@ -55,7 +57,11 @@ async def fetch_blacklist(retries: int = 3) -> set[str]:
     return merged
 
 
-def extract_urls(text: str, embeds=None, attachments=None) -> list[str]:
+def extract_urls(
+    text: str | None,
+    embeds: Sequence[Any] | None = None,
+    attachments: Sequence[Any] | None = None,
+) -> list[str]:
     raw = list(_URL_RE.findall(text or ""))
 
     if embeds:

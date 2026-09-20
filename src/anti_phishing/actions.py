@@ -243,7 +243,8 @@ async def handle_detection(
                         data = await att.read()
                         if isinstance(data, bytes):
                             read_data = data
-                    except Exception:
+                    except Exception as err:
+                        logger.debug("Could not read bytes for attachment %s: %s", fname, err)
                         read_data = None
                 if read_data is not None:
                     cached_attachments.append((fname, read_data))
