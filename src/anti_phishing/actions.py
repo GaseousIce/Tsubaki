@@ -1,14 +1,24 @@
 import datetime
 import logging
+import re
+from urllib.parse import urlparse
 
 import discord
 
 import db
+from anti_phishing import domain
 
 logger = logging.getLogger("discord")
 
-_PARSE_UNITS = {"d": 86400, "w": 604800}
+_UNIT_MULTIPLIERS = {
+    "s": 1,
+    "m": 60,
+    "h": 3600,
+    "d": 86400,
+    "w": 604800,
+}
 _MAX_TIMEOUT_SECONDS = 2419200  # 28 days
+_MIN_TIMEOUT_SECONDS = 1
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 
 
@@ -37,20 +47,73 @@ def _resolve_gallery_url(message: discord.Message) -> str:
 
 
 def _parse_duration(duration: str) -> int:
-    """Parse a duration string like '7d', '2w', '28d' into seconds. Clamps to 28d max."""
+    """Parse a duration string ('30s', '15m', '2h', '7d', '2w', '1d 2h', or seconds).
+
+    Clamps result to [0, 2419200]. Default on failure or negative: 604800 (7d).
+    """
+    if not isinstance(duration, str):
+        return 604800
     duration = duration.strip().lower()
-    for suffix, multiplier in _PARSE_UNITS.items():
-        if duration.endswith(suffix):
-            try:
-                value = int(duration[: -len(suffix)])
-                return min(value * multiplier, _MAX_TIMEOUT_SECONDS)
-            except ValueError:
-                pass
-    # Fallback: try plain integer seconds.
+    if not duration or "-" in duration:
+        return 604800
+
+    # Ensure no invalid characters other than digits, whitespace, and valid units
+    cleaned = re.sub(r"(\d+)\s*([smhdw])", "", duration).strip()
+    if not cleaned:
+        matches = re.findall(r"(\d+)\s*([smhdw])", duration)
+        if matches:
+            total = sum(int(val) * _UNIT_MULTIPLIERS[unit] for val, unit in matches)
+            if total < 0:
+                return 604800
+            if total == 0:
+                return 0
+            return min(total, _MAX_TIMEOUT_SECONDS)
+
     try:
-        return min(int(duration), _MAX_TIMEOUT_SECONDS)
+        val = int(duration)
+        if val < 0:
+            return 604800
+        if val == 0:
+            return 0
+        return min(val, _MAX_TIMEOUT_SECONDS)
     except ValueError:
-        return 604800  # default 7d
+        return 604800
+
+
+def _is_subordinate(moderator: discord.Member, target: discord.Member) -> bool:
+    """Return True if target is subordinate to moderator in role hierarchy."""
+    if moderator is None or target is None:
+        return False
+
+    mod_id = getattr(moderator, "id", None)
+    target_id = getattr(target, "id", None)
+    if mod_id == target_id:
+        return False
+
+    guild = getattr(moderator, "guild", None) or getattr(target, "guild", None)
+    if guild:
+        owner_id = getattr(guild, "owner_id", None)
+        if owner_id is not None:
+            if mod_id == owner_id:
+                return True
+            if target_id == owner_id:
+                return False
+
+    mod_role = getattr(moderator, "top_role", None)
+    target_role = getattr(target, "top_role", None)
+    if mod_role is None:
+        return False
+    if target_role is None:
+        return True
+
+    try:
+        return mod_role > target_role
+    except TypeError:
+        mod_pos = getattr(mod_role, "position", 0)
+        target_pos = getattr(target_role, "position", 0)
+        if isinstance(mod_pos, (int, float)) and isinstance(target_pos, (int, float)):
+            return mod_pos > target_pos
+        return False
 
 
 def _build_dm_embed(
@@ -116,10 +179,12 @@ def _build_dm_embed(
 async def is_moderator(user: discord.User | discord.Member, guild_cfg: dict) -> bool:
     if isinstance(user, discord.User) or not isinstance(user, discord.Member):
         return False
-    if user.guild_permissions.administrator:
+    perms = getattr(user, "guild_permissions", None)
+    if perms and getattr(perms, "administrator", False):
         return True
     mod_roles = guild_cfg.get("mod_roles", [])
-    if any(r.id in mod_roles for r in user.roles):
+    roles = getattr(user, "roles", None) or []
+    if any(getattr(r, "id", None) in mod_roles for r in roles):
         return True
     return False
 
@@ -171,7 +236,18 @@ class PhishingAlertView(discord.ui.View):
         self.add_item(self.allow_button)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if not await is_moderator(interaction.user, self.guild_cfg):
+        guild_id = interaction.guild_id or (interaction.guild.id if interaction.guild else None)
+        if isinstance(guild_id, int):
+            try:
+                cfg = await db.get_guild_config(guild_id)
+                self.guild_cfg = cfg
+            except Exception as exc:
+                logger.warning("Failed to resolve dynamic guild config in PhishingAlertView: %s", exc)
+                cfg = self.guild_cfg
+        else:
+            cfg = self.guild_cfg
+
+        if not await is_moderator(interaction.user, cfg):
             await interaction.response.send_message(
                 "❌ You do not have permission to moderate phishing alerts.", ephemeral=True
             )
@@ -180,6 +256,17 @@ class PhishingAlertView(discord.ui.View):
 
     async def pardon_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        if self.member is None:
+            await interaction.followup.send("❌ Target member is no longer in the server.", ephemeral=True)
+            return
+
+        if not _is_subordinate(interaction.user, self.member):
+            await interaction.followup.send(
+                "❌ You cannot moderate a member whose top role is higher than or equal to yours.",
+                ephemeral=True,
+            )
+            return
+
         try:
             await self.member.edit(timed_out_until=None, reason=f"Phishing pardon by {interaction.user}")
 
@@ -202,6 +289,17 @@ class PhishingAlertView(discord.ui.View):
 
     async def ban_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        if self.member is None:
+            await interaction.followup.send("❌ Target member is no longer in the server.", ephemeral=True)
+            return
+
+        if not _is_subordinate(interaction.user, self.member):
+            await interaction.followup.send(
+                "❌ You cannot moderate a member whose top role is higher than or equal to yours.",
+                ephemeral=True,
+            )
+            return
+
         try:
             await self.member.ban(reason=f"Phishing manual ban by {interaction.user}")
 
@@ -228,7 +326,26 @@ class PhishingAlertView(discord.ui.View):
             return
 
         try:
-            removed = await db.remove_from_blocklist(self.url)
+            raw_url = self.url.strip()
+            parsed_host = urlparse(raw_url).hostname if "://" in raw_url else raw_url
+            candidates = []
+            if parsed_host:
+                parsed_host = parsed_host.rstrip(".").lower()
+                candidates = domain._domain_candidates(parsed_host)
+
+            all_targets = list(dict.fromkeys(candidates + [raw_url, raw_url.lower()]))
+
+            removed = False
+            for target in all_targets:
+                if await db.remove_from_blocklist(target):
+                    removed = True
+
+            for target in all_targets:
+                if hasattr(domain, "official"):
+                    domain.official.discard(target)
+                if hasattr(domain, "allowed"):
+                    domain.allowed.add(target)
+
             embeds = list(interaction.message.embeds)
             if embeds:
                 embeds[0].color = discord.Color.blue()
@@ -333,7 +450,12 @@ async def handle_detection(
         audit_reason = f"Anti-phishing: {reason} ({url})"
         try:
             if action == "timeout":
-                duration_secs = guild_cfg.get("timeout_duration", 604800)
+                raw_duration = guild_cfg.get("timeout_duration", 604800)
+                try:
+                    duration_secs = int(raw_duration)
+                except (ValueError, TypeError):
+                    duration_secs = 604800
+                duration_secs = max(1, min(duration_secs, _MAX_TIMEOUT_SECONDS))
                 until = discord.utils.utcnow() + datetime.timedelta(seconds=duration_secs)
                 await member.timeout(until, reason=audit_reason)
             elif action == "kick":
@@ -342,6 +464,14 @@ async def handle_detection(
                 await member.ban(reason=audit_reason)
         except (discord.Forbidden, discord.HTTPException) as exc:
             logger.warning("Missing permission or failed to %s %s in guild %s: %s", action, member.id, guild.id, exc)
+        except Exception as exc:
+            logger.exception(
+                "Unexpected error executing punishment %s for %s in guild %s: %s",
+                action,
+                member.id,
+                guild.id,
+                exc,
+            )
 
     # 5. Alert mod channels.
     alert_channels: list[int] = guild_cfg.get("alert_channels", [])
@@ -370,7 +500,13 @@ async def handle_detection(
         content_text = getattr(message, "content", "") or ""
         if content_text.strip():
             preview = content_text if len(content_text) <= 1000 else content_text[:997] + "..."
-            alert_embed.add_field(name="Message Content", value=preview, inline=False)
+            _url_pattern = re.compile(r"https?://", re.IGNORECASE)
+            if _url_pattern.search(content_text):
+                clean_preview = preview.replace("```", "'''")
+                safe_value = f"```\n{clean_preview}\n```"
+            else:
+                safe_value = preview
+            alert_embed.add_field(name="Message Content", value=safe_value, inline=False)
         elif embed_summaries:
             alert_embed.add_field(name="Message Content", value="*(Content in Embeds below)*", inline=False)
         else:
@@ -436,6 +572,12 @@ async def handle_detection(
 
         for channel_id in alert_channels:
             ch = guild.get_channel(channel_id)
+            if ch is None:
+                try:
+                    ch = await guild.fetch_channel(channel_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException, AttributeError) as exc:
+                    logger.warning("Failed to fetch alert channel %s in guild %s: %s", channel_id, guild.id, exc)
+                    ch = None
             if ch is None:
                 continue
             try:

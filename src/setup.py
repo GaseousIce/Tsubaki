@@ -1,3 +1,4 @@
+import copy
 import logging
 
 import discord
@@ -31,7 +32,7 @@ def _check_role_position(guild: discord.Guild) -> tuple[str, bool]:
         return ("Could not determine bot role position.", False)
     total = len(guild.roles)
     rank = total - me.top_role.position
-    if rank <= 3:
+    if rank > 3:
         return (
             f"⚠️ Bot role is #{rank} of {total} — drag it above all others (except admin) for proper moderation.",
             False,
@@ -134,6 +135,8 @@ def _build_setup_embed(
 
 
 def _format_duration(seconds: int) -> str:
+    if seconds <= 0:
+        return "0s"
     days, remainder = divmod(seconds, 86400)
     hours, remainder = divmod(remainder, 3600)
     minutes, secs = divmod(remainder, 60)
@@ -142,9 +145,9 @@ def _format_duration(seconds: int) -> str:
         parts.append(f"{days}d")
     if hours:
         parts.append(f"{hours}h")
-    if not days and minutes:
+    if minutes:
         parts.append(f"{minutes}m")
-    if not days and not hours and secs:
+    if secs:
         parts.append(f"{secs}s")
     return " ".join(parts) if parts else "0s"
 
@@ -153,15 +156,38 @@ def setup(bot):
     @bot.tree.command(name="setup", description="Run a full health, permissions, and configuration check")
     @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
     async def setup_cmd(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
         try:
             db_ok = await _check_db_health()
-            cfg = await db.get_or_create_guild_config(interaction.guild_id)
+            try:
+                cfg = await db.get_or_create_guild_config(interaction.guild_id)
+            except Exception as db_exc:
+                logger.warning("Could not fetch guild config during setup check: %s", db_exc)
+                db_ok = False
+                cfg = copy.deepcopy(db.DEFAULT_GUILD_CONFIG)
             blacklist_count = len(domain.official)
             embed = _build_setup_embed(interaction.guild, cfg, db_ok, blacklist_count)
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as exc:
             logger.exception("setup command failed")
             await interaction.followup.send(f"❌ Setup check failed: {exc}", ephemeral=True)
+
+    @setup_cmd.error
+    async def setup_cmd_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+        try:
+            if isinstance(error, app_commands.MissingPermissions):
+                target = (
+                    interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+                )
+                await target("❌ You do not have permission to run this command.", ephemeral=True)
+            else:
+                logger.error("Unhandled error in /setup command: %s", error)
+                target = (
+                    interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+                )
+                await target("An error occurred.", ephemeral=True)
+        except discord.HTTPException:
+            pass

@@ -16,6 +16,10 @@ def clean_globals():
     db_module._client = None
     if hasattr(db_module, "_config_cache"):
         db_module._config_cache.clear()
+    if hasattr(db_module, "_guild_locks"):
+        db_module._guild_locks.clear()
+    if hasattr(db_module, "_client_lock"):
+        db_module._client_lock = None
     yield
 
 
@@ -25,7 +29,9 @@ def mock_db():
     All db module functions run their real implementation.
     """
     mock_client = MagicMock()
+    mock_client.closed = False
     mock_client.execute = AsyncMock(return_value=MagicMock(rows=[]))
+    mock_client.close = AsyncMock()
 
     with (
         patch.object(db_module, "create_client", return_value=mock_client),

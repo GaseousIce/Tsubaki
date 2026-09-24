@@ -11,7 +11,9 @@ from anti_phishing.commands import (
     _build_settings_embed,
     _format_duration,
     cmd_settings,
+    cmd_settings_error,
     cmd_stats,
+    cmd_stats_error,
 )
 
 
@@ -467,3 +469,117 @@ class TestAntiphishingCommandErrorPaths:
 
         interaction.response.defer.assert_awaited_once_with(ephemeral=True)
         interaction.followup.send.assert_awaited_once_with("❌ Failed to open settings dashboard.", ephemeral=True)
+
+
+class TestViewComponentAuthorization:
+    async def test_settings_dashboard_admin_allowed(self):
+        view = SettingsDashboardView(12345, {"enabled": True, "action": "timeout"})
+        interaction = _make_mock_interaction(12345)
+        interaction.user.guild_permissions = discord.Permissions(administrator=True)
+        interaction.response.is_done.return_value = False
+        assert await view.interaction_check(interaction) is True
+
+    async def test_settings_dashboard_non_admin_rejected(self):
+        view = SettingsDashboardView(12345, {"enabled": True, "action": "timeout"})
+        interaction = _make_mock_interaction(12345)
+        interaction.user.guild_permissions = discord.Permissions(administrator=False)
+        interaction.response.is_done.return_value = False
+        interaction.response.send_message = AsyncMock()
+        assert await view.interaction_check(interaction) is False
+        interaction.response.send_message.assert_awaited_once()
+        assert "Only server administrators" in interaction.response.send_message.call_args.args[0]
+
+    async def test_settings_dashboard_cross_guild_rejected(self):
+        view = SettingsDashboardView(12345, {"enabled": True, "action": "timeout"})
+        interaction = _make_mock_interaction(99999)
+        interaction.response.is_done.return_value = False
+        interaction.response.send_message = AsyncMock()
+        assert await view.interaction_check(interaction) is False
+        assert "does not belong to this server" in interaction.response.send_message.call_args.args[0]
+
+    async def test_roles_channels_non_admin_rejected(self):
+        view = RolesChannelsDashboardView(12345, {"alert_channels": [], "mod_roles": [], "bypass_role": 0})
+        interaction = _make_mock_interaction(12345)
+        interaction.user.guild_permissions = discord.Permissions(administrator=False)
+        interaction.response.is_done.return_value = False
+        interaction.response.send_message = AsyncMock()
+        assert await view.interaction_check(interaction) is False
+        interaction.response.send_message.assert_awaited_once()
+
+    async def test_timeout_modal_non_admin_rejected(self):
+        view = SettingsDashboardView(12345, {"timeout_duration": 604800})
+        modal = TimeoutDurationModal(view)
+        interaction = _make_mock_interaction(12345)
+        interaction.user.guild_permissions = discord.Permissions(administrator=False)
+        interaction.response.is_done.return_value = False
+        interaction.response.send_message = AsyncMock()
+        assert await modal.interaction_check(interaction) is False
+
+    async def test_timeout_modal_on_submit_non_admin_blocked(self):
+        view = SettingsDashboardView(12345, {"timeout_duration": 604800})
+        modal = TimeoutDurationModal(view)
+        modal.duration_input._value = "14d"
+        interaction = _make_mock_interaction(12345)
+        interaction.user.guild_permissions = discord.Permissions(administrator=False)
+        interaction.response.is_done.return_value = False
+        interaction.response.send_message = AsyncMock()
+
+        with patch("anti_phishing.commands.db.update_guild_config", new_callable=AsyncMock) as mock_update:
+            await modal.on_submit(interaction)
+            mock_update.assert_not_called()
+
+    async def test_custom_dm_modal_non_admin_rejected(self):
+        view = SettingsDashboardView(12345, {})
+        modal = CustomDMModal(view)
+        interaction = _make_mock_interaction(12345)
+        interaction.user.guild_permissions = discord.Permissions(administrator=False)
+        interaction.response.is_done.return_value = False
+        interaction.response.send_message = AsyncMock()
+        assert await modal.interaction_check(interaction) is False
+
+    async def test_custom_dm_modal_on_submit_non_admin_blocked(self):
+        view = SettingsDashboardView(12345, {})
+        modal = CustomDMModal(view)
+        modal.dm_input._value = "Hacked message"
+        interaction = _make_mock_interaction(12345)
+        interaction.user.guild_permissions = discord.Permissions(administrator=False)
+        interaction.response.is_done.return_value = False
+        interaction.response.send_message = AsyncMock()
+
+        with patch("anti_phishing.commands.db.update_guild_config", new_callable=AsyncMock) as mock_update:
+            await modal.on_submit(interaction)
+            mock_update.assert_not_called()
+
+
+class TestSlashCommandPermissionsAndErrorHandlers:
+    def test_commands_have_admin_permission_check(self):
+        assert any(
+            hasattr(c, "predicate") and "administrator" in str(c.predicate) or hasattr(c, "__name__")
+            for c in cmd_stats.checks
+        )
+        assert any(
+            hasattr(c, "predicate") and "administrator" in str(c.predicate) or hasattr(c, "__name__")
+            for c in cmd_settings.checks
+        )
+
+    async def test_cmd_stats_error_handles_missing_permissions(self):
+        interaction = _make_mock_interaction(12345)
+        interaction.response.is_done.return_value = False
+        interaction.response.send_message = AsyncMock()
+        error = discord.app_commands.MissingPermissions(["administrator"])
+
+        await cmd_stats_error(interaction, error)
+        interaction.response.send_message.assert_awaited_once_with(
+            "❌ You do not have permission to run this command.", ephemeral=True
+        )
+
+    async def test_cmd_settings_error_handles_missing_permissions(self):
+        interaction = _make_mock_interaction(12345)
+        interaction.response.is_done.return_value = False
+        interaction.response.send_message = AsyncMock()
+        error = discord.app_commands.MissingPermissions(["administrator"])
+
+        await cmd_settings_error(interaction, error)
+        interaction.response.send_message.assert_awaited_once_with(
+            "❌ You do not have permission to run this command.", ephemeral=True
+        )

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import discord
@@ -23,8 +24,7 @@ def setup(
     database_available: bool = True,
     enable_database_recovery: bool = False,
 ) -> None:
-    """
-    Register the on_message listener and /antiphishing command group.
+    """Register the on_message listener and /antiphishing command group.
     Call this from setup_hook() after migrate().
     """
 
@@ -84,9 +84,17 @@ def setup(
             except Exception as exc:
                 logger.warning("find_in_blacklists error: %s", exc)
 
-        # 2. Rate-limit heuristic.
-        if not reason:
-            if config.get("rate_enabled", True) and rate_limit.rate_limit_check(
+            # 1.5. Check typosquat patterns if blacklist check did not match (F03)
+            if not reason and hasattr(domain, "check_typosquats"):
+                try:
+                    detected_url, reason = await domain.check_typosquats(extracted_urls)
+                except Exception as exc:
+                    logger.warning("check_typosquats error: %s", exc)
+
+        # 2. Rate-limit heuristic (only trigger when message actually contains URLs).
+        if not reason and extracted_urls and config.get("rate_enabled", True):
+            if rate_limit.rate_limit_check(
+                message.guild.id,
                 message.author.id,
                 message.channel.id,
                 message.content,
@@ -94,18 +102,17 @@ def setup(
                 config.get("rate_threshold", 3),
             ):
                 reason = "rate_limit"
-                if extracted_urls and db_available:
-                    detected_url = extracted_urls[0]
+                detected_url = extracted_urls[0]
+                if db_available:
                     for url in extracted_urls:
                         try:
                             await db.add_to_blocklist(url, "rate_limit")
                         except Exception as exc:
                             logger.warning("add_to_blocklist rate_limit failed for %s: %s", url, exc)
-                else:
-                    detected_url = extracted_urls[0] if extracted_urls else None
 
         if reason:
-            rate_limit.clear_user(message.author.id)
+            rate_limit.clear_user(message.guild.id, message.author.id)
+
             try:
                 await actions.handle_detection(
                     message,
@@ -132,21 +139,26 @@ def setup(
         except Exception as exc:
             logger.warning("Failed to prune stale rate-limit entries: %s", exc)
 
-    async def on_ready() -> None:
-        nonlocal backfill_complete, recovery_started
-        if not prune_rate_limits.is_running():
-            prune_rate_limits.start()
-        if enable_database_recovery and not recovery_started:
-            recover_database.start()
-            recovery_started = True
-        if backfill_complete or not db_available:
-            return
+    @prune_rate_limits.error
+    async def on_prune_rate_limits_error(error: Exception) -> None:
+        logger.error("Unhandled error in prune_rate_limits loop: %s", error, exc_info=True)
+
+    refresh_interval_hours = float(config.get("blacklist_refresh_hours", 12.0))
+
+    @tasks.loop(hours=refresh_interval_hours)
+    async def refresh_blacklist() -> None:
         try:
-            await backfill_guild_configs(bot)
+            await fetch_official_blacklist(config)
         except Exception as exc:
-            await mark_database_unavailable(exc)
-        else:
-            backfill_complete = True
+            logger.warning("Failed to refresh official blacklist: %s", exc)
+
+    @refresh_blacklist.before_loop
+    async def before_refresh_blacklist() -> None:
+        await asyncio.sleep(refresh_interval_hours * 3600)
+
+    @refresh_blacklist.error
+    async def on_refresh_blacklist_error(error: Exception) -> None:
+        logger.error("Unhandled error in refresh_blacklist loop: %s", error, exc_info=True)
 
     @tasks.loop(minutes=1)
     async def recover_database() -> None:
@@ -167,6 +179,28 @@ def setup(
     async def before_recover_database() -> None:
         await bot.wait_until_ready()
 
+    @recover_database.error
+    async def on_recover_database_error(error: Exception) -> None:
+        logger.error("Unhandled error in recover_database loop: %s", error, exc_info=True)
+
+    async def on_ready() -> None:
+        nonlocal backfill_complete, recovery_started
+        if not prune_rate_limits.is_running():
+            prune_rate_limits.start()
+        if not refresh_blacklist.is_running():
+            refresh_blacklist.start()
+        if enable_database_recovery and not recovery_started:
+            recover_database.start()
+            recovery_started = True
+        if backfill_complete or not db_available:
+            return
+        try:
+            await backfill_guild_configs(bot)
+        except Exception as exc:
+            await mark_database_unavailable(exc)
+        else:
+            backfill_complete = True
+
     bot.add_listener(on_message)
     bot.add_listener(on_guild_join)
     bot.add_listener(on_ready)
@@ -175,8 +209,7 @@ def setup(
 
 
 async def fetch_official_blacklist(config: dict) -> None:
-    """
-    Fetch the official phishing domain list into domain.official.
+    """Fetch the official phishing domain list into domain.official.
     Called from setup_hook() after setup().
     On complete failure, posts no embed (callers handle alerting if needed).
     """

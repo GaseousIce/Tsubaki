@@ -292,8 +292,8 @@ class TestPhishingPunishment:
 
         assert len(alerts.history()) == 1
 
-    async def test_rate_limit_no_urls_still_punishes(self, simcord_env_rate, mock_db, official_domains):
-        """Same non-URL content in 2+ channels triggers rate limit via content hash."""
+    async def test_rate_limit_no_urls_does_not_punish(self, simcord_env_rate, mock_db, official_domains):
+        """Same non-URL content in 2+ channels does NOT trigger rate limit punishment (F06)."""
         guild = simcord_env_rate.create_guild()
         ch1 = guild.create_text_channel("ch1")
         ch2 = guild.create_text_channel("ch2")
@@ -314,8 +314,37 @@ class TestPhishingPunishment:
         await alice.send(ch1, "same text, no urls here")
         await alice.send(ch2, "same text, no urls here")
 
-        assert alice.member.timed_out_until is not None
-        assert len(alerts.history()) == 1
+        assert alice.member.timed_out_until is None
+        assert len(alerts.history()) == 0
+        assert len(ch1.history()) == 1
+        assert len(ch2.history()) == 1
+
+    async def test_rate_limit_no_urls_three_channels_does_not_punish(self, simcord_env_rate, mock_db, official_domains):
+        """Distinct non-URL messages across 3 channels do NOT trigger rate limiting (F06)."""
+        guild = simcord_env_rate.create_guild()
+        ch1 = guild.create_text_channel("ch1")
+        ch2 = guild.create_text_channel("ch2")
+        ch3 = guild.create_text_channel("ch3")
+        alerts = guild.create_text_channel("alerts")
+        alice = guild.add_member(simcord_env_rate.create_user("alice"))
+
+        await _grant_mod_perms(simcord_env_rate, guild)
+
+        cfg = json.dumps({"alert_channels": [alerts.id]})
+
+        async def side_effect(sql, params=None):
+            if "SELECT config FROM guild_configs" in sql:
+                return MagicMock(rows=[(cfg,)])
+            return MagicMock(rows=[])
+
+        mock_db.execute.side_effect = side_effect
+
+        await alice.send(ch1, "Hello from channel 1")
+        await alice.send(ch2, "Hello from channel 2")
+        await alice.send(ch3, "Hello from channel 3")
+
+        assert alice.member.timed_out_until is None
+        assert len(alerts.history()) == 0
 
     async def test_rate_limit_add_to_blocklist_retries_on_error(self, simcord_env_rate, mock_db, official_domains):
         """add_to_blocklist failing during rate limit doesn't crash the handler."""
@@ -350,7 +379,8 @@ class TestAntiPhishingCommands:
     async def test_stats_command(self, simcord_env, mock_db):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
-        alice = guild.add_member(simcord_env.create_user("alice"))
+        admin_role = guild.create_role("Admin", permissions=discord.Permissions(administrator=True))
+        alice = guild.add_member(simcord_env.create_user("alice"), roles=[admin_role])
 
         async def side_effect(sql, params=None):
             if sql == "SELECT COUNT(*) as cnt FROM detection_log WHERE guild_id = ?":
@@ -374,10 +404,21 @@ class TestAntiPhishingCommands:
         assert "evil.com" in embed_str
         assert "official_blacklist" in embed_str
 
-    async def test_settings_command(self, simcord_env):
+    async def test_stats_command_requires_admin(self, simcord_env):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
         alice = guild.add_member(simcord_env.create_user("alice"))
+
+        result = await alice.slash(channel, "antiphishing stats")
+        assert result.response is not None
+        assert "do not have permission" in result.response.content
+        simcord.asserts.assert_error(simcord_env, discord.app_commands.errors.MissingPermissions)
+
+    async def test_settings_command(self, simcord_env):
+        guild = simcord_env.create_guild()
+        channel = guild.create_text_channel("general")
+        admin_role = guild.create_role("Admin", permissions=discord.Permissions(administrator=True))
+        alice = guild.add_member(simcord_env.create_user("alice"), roles=[admin_role])
 
         result = await alice.slash(channel, "antiphishing settings")
 
@@ -387,6 +428,16 @@ class TestAntiPhishingCommands:
         embed_str = str(embed_dict)
         assert "Status" in embed_str
         assert "Enabled" in embed_str
+
+    async def test_settings_command_requires_admin(self, simcord_env):
+        guild = simcord_env.create_guild()
+        channel = guild.create_text_channel("general")
+        alice = guild.add_member(simcord_env.create_user("alice"))
+
+        result = await alice.slash(channel, "antiphishing settings")
+        assert result.response is not None
+        assert "do not have permission" in result.response.content
+        simcord.asserts.assert_error(simcord_env, discord.app_commands.errors.MissingPermissions)
 
 
 class TestChannelClear:
@@ -399,8 +450,8 @@ class TestChannelClear:
         await alice.send(channel, "message two")
 
         result = await alice.slash(channel, "clear")
-        assert result.response is None
-        assert not result.acknowledged
+        assert result.response is not None
+        assert "Manage Messages permission" in result.response.content
         assert len(channel.history()) == 2
         simcord.asserts.assert_error(simcord_env, discord.app_commands.errors.MissingPermissions)
 

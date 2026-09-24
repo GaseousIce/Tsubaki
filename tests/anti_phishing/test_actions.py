@@ -3,9 +3,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
+from anti_phishing import domain
 from anti_phishing.actions import (
     PhishingAlertView,
     _build_dm_embed,
+    _is_subordinate,
     _parse_duration,
     handle_detection,
     is_moderator,
@@ -20,6 +22,14 @@ class TestParseDuration:
             ("2w", 1209600),
             ("28d", 2419200),
             ("999d", 2419200),
+            ("30s", 30),
+            ("15m", 900),
+            ("2h", 7200),
+            ("1d 2h", 93600),
+            ("-5d", 604800),
+            ("-100", 604800),
+            ("0", 0),
+            ("0d", 0),
             ("garbage", 604800),
             ("notanumberd", 604800),
             ("3600", 3600),
@@ -79,6 +89,16 @@ class TestIsModerator:
     async def test_mod_roles_not_in_config(self):
         result = await is_moderator(self.make_member(), {})
         assert result is False
+
+    async def test_is_moderator_none_guild_permissions(self):
+        member = self.make_member()
+        member.guild_permissions = None
+        assert await is_moderator(member, {}) is False
+
+    async def test_is_moderator_none_guild_permissions_with_mod_role(self):
+        member = self.make_member(role_ids=[999])
+        member.guild_permissions = None
+        assert await is_moderator(member, {"mod_roles": [999]}) is True
 
 
 class TestHandleDetectionActions:
@@ -711,6 +731,10 @@ class TestPhishingAlertViewCallbacks:
         interaction.user.guild_permissions = discord.Permissions(administrator=True)
         interaction.user.mention = "<@999>"
         interaction.user.roles = []
+        role = MagicMock()
+        role.position = 10
+        role.__gt__ = lambda self, other: getattr(self, "position", 0) > getattr(other, "position", 0)
+        interaction.user.top_role = role
         return interaction
 
     @staticmethod
@@ -718,6 +742,10 @@ class TestPhishingAlertViewCallbacks:
         member = MagicMock(spec=discord.Member)
         member.id = 456
         member.mention = "<@456>"
+        role = MagicMock()
+        role.position = 1
+        role.__gt__ = lambda self, other: getattr(self, "position", 0) > getattr(other, "position", 0)
+        member.top_role = role
         return member
 
     async def test_pardon_callback_success(self):
@@ -849,3 +877,297 @@ class TestPhishingAlertViewCallbacks:
         assert len(edited_embeds) == 2
         assert "Pardoned by" in edited_embeds[0].description
         assert edited_embeds[1].url == "https://discord.com"
+
+
+class TestRoleHierarchyModeration:
+    def _make_member(self, user_id=1, position=5, is_owner=False):
+        member = MagicMock(spec=discord.Member)
+        member.id = user_id
+        member.guild = MagicMock()
+        member.guild.owner_id = 999 if not is_owner else user_id
+        role = MagicMock()
+        role.position = position
+        role.__gt__ = lambda self, other: self.position > other.position
+        member.top_role = role
+        return member
+
+    def test_is_subordinate_superior_moderator(self):
+        mod = self._make_member(user_id=10, position=10)
+        target = self._make_member(user_id=20, position=5)
+        assert _is_subordinate(mod, target) is True
+
+    def test_is_subordinate_equal_role_rejected(self):
+        mod = self._make_member(user_id=10, position=5)
+        target = self._make_member(user_id=20, position=5)
+        assert _is_subordinate(mod, target) is False
+
+    def test_is_subordinate_inferior_moderator_rejected(self):
+        mod = self._make_member(user_id=10, position=5)
+        target = self._make_member(user_id=20, position=10)
+        assert _is_subordinate(mod, target) is False
+
+    def test_is_subordinate_server_owner_moderator(self):
+        mod = self._make_member(user_id=999, position=1, is_owner=True)
+        target = self._make_member(user_id=20, position=10)
+        assert _is_subordinate(mod, target) is True
+
+    def test_is_subordinate_server_owner_target_rejected(self):
+        mod = self._make_member(user_id=10, position=10)
+        target = self._make_member(user_id=999, position=5, is_owner=True)
+        assert _is_subordinate(mod, target) is False
+
+    def test_is_subordinate_same_user_rejected(self):
+        mod = self._make_member(user_id=10, position=10)
+        assert _is_subordinate(mod, mod) is False
+
+    async def test_ban_callback_rejects_non_subordinate(self):
+        mod = self._make_member(user_id=10, position=5)
+        target = self._make_member(user_id=20, position=10)
+        view = PhishingAlertView(target, "https://evil.com", "timeout", {"mod_roles": []})
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.user = mod
+        interaction.response = MagicMock(defer=AsyncMock())
+        interaction.followup = MagicMock(send=AsyncMock())
+
+        await view.ban_callback(interaction)
+        assert "cannot moderate a member" in interaction.followup.send.call_args.args[0]
+        target.ban.assert_not_called()
+
+    async def test_pardon_callback_rejects_non_subordinate(self):
+        mod = self._make_member(user_id=10, position=5)
+        target = self._make_member(user_id=20, position=10)
+        view = PhishingAlertView(target, "https://evil.com", "timeout", {"mod_roles": []})
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.user = mod
+        interaction.response = MagicMock(defer=AsyncMock())
+        interaction.followup = MagicMock(send=AsyncMock())
+
+        await view.pardon_callback(interaction)
+        assert "cannot moderate a member" in interaction.followup.send.call_args.args[0]
+        target.edit.assert_not_called()
+
+    def test_is_subordinate_owner_self_moderation_rejected(self):
+        owner = self._make_member(user_id=999, position=10, is_owner=True)
+        assert _is_subordinate(owner, owner) is False
+
+    def test_is_subordinate_unranked_moderator_rejected(self):
+        mod = self._make_member(user_id=10, position=None)
+        mod.top_role = None
+        target = self._make_member(user_id=20, position=5)
+        assert _is_subordinate(mod, target) is False
+
+    def test_is_subordinate_both_unranked_rejected(self):
+        mod = self._make_member(user_id=10, position=None)
+        mod.top_role = None
+        target = self._make_member(user_id=20, position=None)
+        target.top_role = None
+        assert _is_subordinate(mod, target) is False
+
+    def test_is_subordinate_none_members(self):
+        member = self._make_member(user_id=10, position=5)
+        assert _is_subordinate(None, member) is False
+        assert _is_subordinate(member, None) is False
+
+
+class TestAllowCallbackSuffixAndAllowlist:
+    async def test_allow_callback_removes_suffixes_and_populates_allowlist(self):
+        member = MagicMock(spec=discord.Member)
+        view = PhishingAlertView(member, "https://sub.evil.com/login", "timeout", {"mod_roles": []})
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.response = MagicMock(defer=AsyncMock())
+        interaction.followup = MagicMock(send=AsyncMock())
+        interaction.message = MagicMock(embeds=[discord.Embed(description="test")])
+        interaction.message.edit = AsyncMock()
+
+        domain.official.add("evil.com")
+        domain.official.add("sub.evil.com")
+
+        removed_calls = []
+
+        async def fake_remove(domain_target):
+            removed_calls.append(domain_target)
+            return True
+
+        with patch("anti_phishing.actions.db.remove_from_blocklist", side_effect=fake_remove):
+            await view.allow_callback(interaction)
+
+        assert "sub.evil.com" in removed_calls
+        assert "evil.com" in removed_calls
+        assert "evil.com" not in domain.official
+        assert "sub.evil.com" not in domain.official
+        assert "evil.com" in domain.allowed
+        assert "sub.evil.com" in domain.allowed
+        domain.allowed.clear()
+
+    async def test_allow_callback_public_suffix_not_added(self):
+        member = MagicMock(spec=discord.Member)
+        view = PhishingAlertView(member, "https://user.github.io/path", "timeout", {"mod_roles": []})
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.response = MagicMock(defer=AsyncMock())
+        interaction.followup = MagicMock(send=AsyncMock())
+        interaction.message = MagicMock(embeds=[discord.Embed(description="test")])
+        interaction.message.edit = AsyncMock()
+
+        removed_calls = []
+
+        async def fake_remove(domain_target):
+            removed_calls.append(domain_target)
+            return True
+
+        with patch("anti_phishing.actions.db.remove_from_blocklist", side_effect=fake_remove):
+            await view.allow_callback(interaction)
+
+        assert "user.github.io" in domain.allowed
+        assert "github.io" not in domain.allowed
+        assert "github.io" not in removed_calls
+        domain.allowed.clear()
+
+
+class TestDynamicConfigResolution:
+    async def test_interaction_check_fetches_dynamic_config(self):
+        member = MagicMock(spec=discord.Member)
+        view = PhishingAlertView(member, "https://evil.com", "timeout", {"mod_roles": [111]})
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.guild_id = 12345
+        interaction.user = MagicMock(spec=discord.Member)
+        role = MagicMock(id=222)
+        interaction.user.roles = [role]
+        interaction.user.guild_permissions = discord.Permissions(administrator=False)
+        interaction.response = MagicMock(send_message=AsyncMock())
+
+        # Config in DB updated to grant mod_roles = [222]
+        with patch("anti_phishing.actions.db.get_guild_config", AsyncMock(return_value={"mod_roles": [222]})):
+            allowed = await view.interaction_check(interaction)
+            assert allowed is True
+            assert view.guild_cfg == {"mod_roles": [222]}
+
+
+class TestSafeActionExecutionAndClamping:
+    async def test_handle_detection_clamps_timeout_duration(self):
+        guild = MagicMock(spec=discord.Guild)
+        guild.id = 1
+        guild.name = "Test Guild"
+        guild.get_channel = MagicMock(return_value=None)
+        guild.fetch_channel = AsyncMock(return_value=None)
+
+        message = MagicMock(spec=discord.Message)
+        message.guild = guild
+        message.content = "check https://evil.com"
+        message.attachments = []
+        message.embeds = []
+        message.author = MagicMock(id=42)
+        message.delete = AsyncMock()
+
+        member = MagicMock(spec=discord.Member)
+        member.id = 42
+        member.send = AsyncMock()
+        member.timeout = AsyncMock()
+
+        cfg = {"action": "timeout", "timeout_duration": 99999999, "alert_channels": []}
+        with patch("anti_phishing.actions.db.log_detection", AsyncMock()):
+            await handle_detection(message, member, cfg, "https://evil.com", "official_blacklist")
+
+        member.timeout.assert_awaited_once()
+        timeout_until = member.timeout.call_args.args[0]
+        now = discord.utils.utcnow()
+        diff = (timeout_until - now).total_seconds()
+        # Clamped to 2419200 (28 days) within 5 seconds tolerance
+        assert abs(diff - 2419200) < 5
+
+    async def test_handle_detection_punishment_exception_still_alerts(self):
+        alert_ch = MagicMock()
+        alert_ch.send = AsyncMock()
+
+        guild = MagicMock(spec=discord.Guild)
+        guild.id = 1
+        guild.name = "Test Guild"
+        guild.get_channel = MagicMock(return_value=alert_ch)
+
+        message = MagicMock(spec=discord.Message)
+        message.guild = guild
+        message.content = "check https://evil.com"
+        message.attachments = []
+        message.embeds = []
+        message.author = MagicMock(id=42)
+        message.delete = AsyncMock()
+
+        member = MagicMock(spec=discord.Member)
+        member.id = 42
+        member.send = AsyncMock()
+        member.timeout = AsyncMock(side_effect=Exception("Discord API timeout error"))
+
+        cfg = {"action": "timeout", "timeout_duration": 604800, "alert_channels": [123]}
+        with patch("anti_phishing.actions.db.log_detection", AsyncMock()):
+            await handle_detection(message, member, cfg, "https://evil.com", "official_blacklist")
+
+        # Mod alert was still sent despite punishment exception
+        alert_ch.send.assert_awaited_once()
+
+
+class TestUncachedAlertChannelFallback:
+    async def test_handle_detection_fetches_uncached_channel(self):
+        fetched_ch = MagicMock()
+        fetched_ch.send = AsyncMock()
+
+        guild = MagicMock(spec=discord.Guild)
+        guild.id = 1
+        guild.name = "Test Guild"
+        guild.get_channel = MagicMock(return_value=None)
+        guild.fetch_channel = AsyncMock(return_value=fetched_ch)
+
+        message = MagicMock(spec=discord.Message)
+        message.guild = guild
+        message.content = "check https://evil.com"
+        message.attachments = []
+        message.embeds = []
+        message.author = MagicMock(id=42)
+        message.delete = AsyncMock()
+
+        member = MagicMock(spec=discord.Member)
+        member.id = 42
+        member.send = AsyncMock()
+        member.timeout = AsyncMock()
+
+        cfg = {"action": "timeout", "alert_channels": [123]}
+        with patch("anti_phishing.actions.db.log_detection", AsyncMock()):
+            await handle_detection(message, member, cfg, "https://evil.com", "official_blacklist")
+
+        guild.fetch_channel.assert_awaited_once_with(123)
+        fetched_ch.send.assert_awaited_once()
+
+
+class TestDefangedPhishingEmbeds:
+    async def test_handle_detection_defangs_phishing_link_in_codeblock(self):
+        alert_ch = MagicMock()
+        alert_ch.send = AsyncMock()
+
+        guild = MagicMock(spec=discord.Guild)
+        guild.id = 1
+        guild.name = "Test Guild"
+        guild.get_channel = MagicMock(return_value=alert_ch)
+
+        phish_msg = "Free nitro https://evil-discord.ru/gift claim now!"
+        message = MagicMock(spec=discord.Message)
+        message.guild = guild
+        message.content = phish_msg
+        message.attachments = []
+        message.embeds = []
+        message.author = MagicMock(id=42)
+        message.delete = AsyncMock()
+
+        member = MagicMock(spec=discord.Member)
+        member.id = 42
+        member.send = AsyncMock()
+        member.timeout = AsyncMock()
+
+        cfg = {"action": "timeout", "alert_channels": [123]}
+        with patch("anti_phishing.actions.db.log_detection", AsyncMock()):
+            await handle_detection(message, member, cfg, "https://evil-discord.ru/gift", "official_blacklist")
+
+        alert_embed = alert_ch.send.call_args.kwargs["embed"]
+        content_field = next(f for f in alert_embed.fields if f.name == "Message Content")
+        # Defanged via code block
+        assert content_field.value.startswith("```\n")
+        assert content_field.value.endswith("\n```")
+        # Still contains verbatim message substring for test compatibility
+        assert phish_msg in content_field.value

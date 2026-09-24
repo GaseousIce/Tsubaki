@@ -1,6 +1,6 @@
 # Tsubaki
 
-Tsubaki is a compact Discord auto-moderation bot with anti-phishing, channel cleaning, a setup health check, and an optional Groq-powered `/ask` command. It runs locally with `uv` or as a Render web service with a lightweight `/health` endpoint.
+Tsubaki is a compact Discord auto-moderation bot with anti-phishing, safe message inspection/testing, channel cleaning, a setup health check, and an optional Groq-powered `/ask` command. It runs locally with `uv` or as a Render web service with a lightweight `/health` endpoint.
 
 ## Features
 
@@ -14,7 +14,8 @@ Incoming messages are checked before links can spread through a server:
 4. Scan configured typosquat patterns.
 5. Detect link spam across 3+ unique channels within 10 seconds.
 6. Delete the message, DM the user with recovery guidance, apply the configured action, and log the detection (including message text and attachment URLs/metadata) to Turso.
-7. Alert configured moderator channels with interactive action buttons, deleted message text, embed previews, and attachment metadata evidence.
+7. Alert configured moderator channels with interactive action buttons (**Pardon**, **Ban**, **Allowlist**), safe code-block message text previews (preventing accidental link clicks), original embed summaries, and an image grid gallery with cached attachment re-uploads (respecting payload and memory limits).
+8. Enforce Discord role hierarchy checks so moderators cannot perform action overrides against members with higher or equal roles.
 
 Supported actions are `timeout`, `kick`, `ban`, and `warn`. Defaults are enabled anti-phishing, a 7-day timeout, no alert channels, no mod roles, no bypass role, and the built-in recovery DM.
 
@@ -26,6 +27,7 @@ Supported actions are `timeout`, `kick`, `ban`, and `warn`. Defaults are enabled
 | `/ping` | None | Check bot latency. |
 | `/ask <question>` | None | Ask Groq with a 1 request / 5 second per-user cooldown. Disabled when `GROQ_API_KEY` is missing. |
 | `/clear [limit] [user] [bots_only]` | Manage Messages | Delete messages in the current channel with optional filters. |
+| `/test <message_id>` | Manage Messages | Inspect a message by ID or link and safely log its threat status, embed summaries, and attachment previews to the log channel without taking punitive action. |
 | `/setup` | Administrator | Run database, blacklist, role, permission, action, and alert-channel checks. |
 | `/antiphishing settings` | Administrator | Open interactive anti-phishing settings dashboard (action, timeout duration, roles, alert channels, custom DM). |
 | `/antiphishing stats` | Administrator | Show detection totals, top blocked domains, and the latest detection. |
@@ -83,6 +85,7 @@ uv run ruff format src/ tests/
 uv run ruff check --fix src/ tests/
 uv run pytest tests/ -q
 uv run pytest tests/anti_phishing/ -q
+uv run pytest tests/e2e/ -q
 uv run pytest -m "not network" -q
 ```
 
@@ -93,8 +96,8 @@ Ruff uses a 120-character line length, double quotes, 4-space indents, and E/F/I
 ```text
 Tsubaki/
 ├── src/
-│   ├── main.py              # Entrypoint, bot lifecycle, healthcheck server
-│   ├── commands.py          # /hello, /ping, /ask commands
+│   ├── main.py              # Entrypoint, bot lifecycle, graceful shutdown, healthcheck server
+│   ├── commands.py          # /hello, /ping, /ask, and /test commands
 │   ├── setup.py             # /setup health and permissions check
 │   ├── channel_clear.py     # /clear and optional daily purge
 │   ├── config.py            # config.toml loader
@@ -102,13 +105,21 @@ Tsubaki/
 │   ├── groq_service.py      # Groq /ask client wrapper
 │   └── anti_phishing/       # Detection pipeline, interactive UI, actions, domains
 │       ├── __init__.py      # Listener setup, background tasks, slash group
-│       ├── actions.py       # Detection handler, attachment metadata logging, mod alerts
+│       ├── actions.py       # Detection handler, image gallery alerts, interactive buttons
 │       ├── commands.py      # /antiphishing settings dashboard and stats
 │       ├── domain.py        # URL parsing, official list fetching, typosquatting
 │       └── rate_limit.py    # Channel-spread rate limiter and auto-pruning
-├── tests/                   # Pytest and SimCord unit & integration tests
-│   ├── anti_phishing/       # Anti-phishing action, command, and domain tests
-│   └── conftest.py          # SimCord fixtures, DB mocks, state resets
+├── tests/                   # Pytest and SimCord unit, integration, and E2E tests
+│   ├── anti_phishing/       # Anti-phishing action, command, domain, and lifecycle tests
+│   ├── e2e/                 # Multi-tier end-to-end and adversarial scenario tests
+│   ├── conftest.py          # SimCord fixtures, DB mocks, state resets
+│   ├── test_bot_commands.py # Tests for basic and AI slash commands (/hello, /ping, /ask, /test)
+│   ├── test_channel_clear.py# Tests for /clear command and daily purge loop
+│   ├── test_config.py       # Tests for config loading
+│   ├── test_db.py           # Tests for Turso migrations and CRUD helpers
+│   ├── test_groq.py         # Tests for Groq integration
+│   ├── test_main.py         # Tests for bot lifecycle and graceful shutdown
+│   └── test_setup.py        # Tests for /setup health check
 ├── config.toml              # Anti-phishing and Groq defaults
 ├── render.yaml              # Render web service blueprint
 ├── ruff.toml                # Ruff configuration

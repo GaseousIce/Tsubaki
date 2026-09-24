@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,6 +11,8 @@ import db
 @pytest.fixture(autouse=True)
 def reset_db():
     db._client = None
+    db._client_lock = None
+    db.clear_config_cache()
     yield
 
 
@@ -32,6 +35,50 @@ class TestGetDb:
             with pytest.raises(ValueError, match="TURSO_AUTH_TOKEN"):
                 await db.get_db()
 
+    async def test_get_db_recreates_closed_client(self, mock_db):
+        client1 = await db.get_db()
+        assert client1 is mock_db
+        mock_db.closed = True
+
+        fresh_client = MagicMock()
+        fresh_client.closed = False
+        fresh_client.close = AsyncMock()
+
+        with patch.object(db, "create_client", return_value=fresh_client):
+            client2 = await db.get_db()
+            assert client2 is fresh_client
+            assert client2 is not client1
+
+    async def test_get_db_concurrency_lock(self):
+        db._client = None
+        created_clients = []
+
+        def fake_create(url, auth_token):
+            c = MagicMock()
+            c.closed = False
+            created_clients.append(c)
+            return c
+
+        with (
+            patch.object(db, "create_client", side_effect=fake_create),
+            patch.dict(os.environ, {"TURSO_DATABASE_URL": "libsql://x", "TURSO_AUTH_TOKEN": "y"}),
+        ):
+            clients = await asyncio.gather(*(db.get_db() for _ in range(10)))
+            assert len(created_clients) == 1
+            assert all(c is created_clients[0] for c in clients)
+
+    async def test_close_db(self, mock_db):
+        await db.get_db()
+        assert db._client is not None
+        await db.close_db()
+        mock_db.close.assert_awaited_once()
+        assert db._client is None
+
+    async def test_close_db_idempotent_when_none(self):
+        db._client = None
+        await db.close_db()
+        assert db._client is None
+
 
 class TestMigrate:
     async def test_migrate_creates_tables(self, mock_db):
@@ -39,7 +86,10 @@ class TestMigrate:
         executed_sqls = [c[0][0] for c in mock_db.execute.call_args_list]
         assert any("CREATE TABLE IF NOT EXISTS guild_configs" in sql for sql in executed_sqls)
         assert any("CREATE TABLE IF NOT EXISTS detection_log" in sql for sql in executed_sqls)
-        assert any("CREATE TABLE IF NOT EXISTS custom_blocklist" in sql for sql in executed_sqls)
+        assert any(
+            "CREATE TABLE IF NOT EXISTS custom_blocklist" in sql and "COLLATE NOCASE" in sql for sql in executed_sqls
+        )
+        assert any("CREATE TABLE IF NOT EXISTS typosquat_patterns" in sql for sql in executed_sqls)
         assert any("CREATE INDEX IF NOT EXISTS idx_detection_log_guild_timestamp" in sql for sql in executed_sqls)
         assert any("CREATE INDEX IF NOT EXISTS idx_detection_log_guild_domain" in sql for sql in executed_sqls)
         assert any("PRAGMA table_info(detection_log)" in sql for sql in executed_sqls)
@@ -47,7 +97,7 @@ class TestMigrate:
     async def test_migrate_idempotent(self, mock_db):
         await db.migrate()
         await db.migrate()
-        assert mock_db.execute.call_count >= 10
+        assert mock_db.execute.call_count >= 12
 
     async def test_migrate_adds_missing_columns(self, mock_db):
         # Simulate an existing table with only the old columns
@@ -55,6 +105,7 @@ class TestMigrate:
             MagicMock(),  # CREATE TABLE guild_configs
             MagicMock(),  # CREATE TABLE detection_log
             MagicMock(),  # CREATE TABLE custom_blocklist
+            MagicMock(),  # CREATE TABLE typosquat_patterns (F24)
             MagicMock(),  # CREATE INDEX idx_detection_log_guild_timestamp
             MagicMock(),  # CREATE INDEX idx_detection_log_guild_domain
             make_mock_rows([(0, "id"), (1, "guild_id"), (2, "domain"), (3, "reason"), (4, "timestamp")]),  # PRAGMA
@@ -77,8 +128,6 @@ class TestAntiPhishingConfig:
 
         call_args = mock_db.execute.call_args
         assert "INSERT INTO guild_configs" in call_args[0][0]
-
-        import json
 
         parsed = json.loads(call_args[0][1][1])
         assert parsed["enabled"] is False
@@ -123,6 +172,51 @@ class TestGuildConfig:
         assert result["enabled"] is False
         assert result["action"] == "warn"
         assert mock_db.execute.await_count == 1
+
+    async def test_default_guild_config_pollution_prevention(self, mock_db):
+        cfg1 = await db.get_guild_config(11111)
+        cfg1["alert_channels"].append(99999)
+        cfg1["mod_roles"].append(88888)
+
+        cfg2 = await db.get_guild_config(22222)
+        assert cfg2["alert_channels"] == []
+        assert cfg2["mod_roles"] == []
+        assert db.DEFAULT_GUILD_CONFIG["alert_channels"] == []
+        assert db.DEFAULT_GUILD_CONFIG["mod_roles"] == []
+
+    async def test_cache_mutation_isolation(self, mock_db):
+        await db.set_guild_config(12345, {"alert_channels": [100]})
+        cfg1 = await db.get_guild_config(12345)
+        cfg1["alert_channels"].append(200)
+
+        cfg2 = await db.get_guild_config(12345)
+        assert cfg2["alert_channels"] == [100]
+
+    async def test_get_guild_config_corrupted_json_fallback(self, mock_db):
+        mock_db.execute.return_value = make_mock_rows([("{broken_json: 123",)])
+        cfg = await db.get_guild_config(12345)
+        assert cfg == db.DEFAULT_GUILD_CONFIG
+
+    async def test_get_guild_config_non_dict_json_fallback(self, mock_db):
+        mock_db.execute.return_value = make_mock_rows([("[1, 2, 3]",)])
+        cfg = await db.get_guild_config(12345)
+        assert cfg == db.DEFAULT_GUILD_CONFIG
+
+    async def test_get_or_create_guild_config_corrupted_json_fallback(self, mock_db):
+        mock_db.execute.return_value = make_mock_rows([("not json at all",)])
+        cfg = await db.get_or_create_guild_config(12345)
+        assert cfg == db.DEFAULT_GUILD_CONFIG
+
+    async def test_update_guild_config_atomic_lock(self, mock_db):
+        stored = json.dumps({"enabled": True, "action": "timeout"})
+        mock_db.execute.return_value = make_mock_rows([(stored,)])
+
+        res1, res2 = await asyncio.gather(
+            db.update_guild_config(12345, action="ban"),
+            db.update_guild_config(12345, enabled=False),
+        )
+        assert res1 is not None
+        assert res2 is not None
 
 
 class TestDetectionLog:
@@ -189,10 +283,9 @@ class TestCustomBlocklist:
         assert result is False
 
     async def test_get_blocklist_source(self, mock_db):
-        row = MagicMock()
-        row.__getitem__.return_value = "manual"
+        # Positional tuple row
         mock_db.execute.side_effect = None
-        mock_db.execute.return_value = MagicMock(rows=[row])
+        mock_db.execute.return_value = make_mock_rows([("manual",)])
         result = await db.get_blocklist_source("evil.com")
         assert result == "manual"
 
@@ -211,6 +304,25 @@ class TestCustomBlocklist:
         mock_db.execute.return_value.rows_affected = 0
         result = await db.remove_from_blocklist("nonexistent.com")
         assert result is False
+
+    async def test_custom_blocklist_case_insensitivity(self, mock_db):
+        await db.add_to_blocklist("  EVIL.COM  ", "manual")
+        call_args = mock_db.execute.call_args
+        assert call_args[0][1] == ("evil.com", "manual")
+
+        await db.is_in_blocklist("EvIL.cOm")
+        call_args = mock_db.execute.call_args
+        assert call_args[0][1] == ("evil.com",)
+
+        mock_db.execute.return_value = make_mock_rows([("manual",)])
+        res = await db.get_blocklist_source("Evil.Com")
+        assert res == "manual"
+        call_args = mock_db.execute.call_args
+        assert call_args[0][1] == ("evil.com",)
+
+        await db.remove_from_blocklist("  EVIL.COM  ")
+        call_args = mock_db.execute.call_args
+        assert call_args[0][1] == ("evil.com",)
 
 
 class TestConfigCache:
@@ -275,3 +387,20 @@ class TestConfigCache:
 
         await db.get_guild_config(12345)
         assert mock_db.execute.call_count == 2
+
+    async def test_cache_lru_eviction(self, mock_db):
+        with patch.object(db, "MAX_CONFIG_CACHE_SIZE", 3):
+            await db.set_guild_config(1, {"val": 1})
+            await db.set_guild_config(2, {"val": 2})
+            await db.set_guild_config(3, {"val": 3})
+
+            # Access 1 so 2 becomes the oldest
+            await db.get_guild_config(1)
+
+            # Insert 4, which should evict 2
+            await db.set_guild_config(4, {"val": 4})
+
+            assert 2 not in db._config_cache
+            assert 1 in db._config_cache
+            assert 3 in db._config_cache
+            assert 4 in db._config_cache

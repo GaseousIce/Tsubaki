@@ -1,7 +1,8 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
+import simcord
 
 from setup import (
     _check_action_readiness,
@@ -17,13 +18,18 @@ class TestFormatDuration:
     def test_zero(self):
         assert _format_duration(0) == "0s"
 
+    def test_negative(self):
+        assert _format_duration(-10) == "0s"
+
     @pytest.mark.parametrize(
         "seconds,expected",
         [
             (86400, "1d"),
             (604800, "7d"),
             (90000, "1d 1h"),
-            (3661, "1h 1m"),
+            (86460, "1d 1m"),
+            (86401, "1d 1s"),
+            (3661, "1h 1m 1s"),
             (3600, "1h"),
             (45, "45s"),
         ],
@@ -56,21 +62,28 @@ class TestCheckRolePosition:
         return guild
 
     def test_position_near_top(self):
-        guild = self._make_guild(20, 17)  # rank = 20 - 17 = 3 -> ⚠️ (<= 3)
-        msg, ok = _check_role_position(guild)
-        assert ok is False
-        assert "⚠️" in msg
-
-    def test_position_mid(self):
-        guild = self._make_guild(20, 15)  # rank = 20 - 15 = 5 -> ✅ (> 3)
+        guild = self._make_guild(20, 17)  # rank = 20 - 17 = 3 -> ✅ (<= 3)
         msg, ok = _check_role_position(guild)
         assert ok is True
         assert "✅" in msg
 
-    def test_position_top(self):
-        guild = self._make_guild(20, 19)  # rank = 1 -> ⚠️
+    def test_position_mid(self):
+        guild = self._make_guild(20, 15)  # rank = 20 - 15 = 5 -> ⚠️ (> 3)
         msg, ok = _check_role_position(guild)
         assert ok is False
+        assert "⚠️" in msg
+
+    def test_position_boundary_four(self):
+        guild = self._make_guild(20, 16)  # rank = 20 - 16 = 4 -> ⚠️ (> 3)
+        msg, ok = _check_role_position(guild)
+        assert ok is False
+        assert "⚠️" in msg
+
+    def test_position_top(self):
+        guild = self._make_guild(20, 19)  # rank = 1 -> ✅
+        msg, ok = _check_role_position(guild)
+        assert ok is True
+        assert "✅" in msg
 
     def test_no_me(self):
         guild = self._make_guild(20, 0, bot_is_none=True)
@@ -204,23 +217,113 @@ class TestSetupCommand:
     async def test_setup_responds_with_embed(self, simcord_env):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
-        alice = guild.add_member(simcord_env.create_user("alice"))
+        admin_role = guild.create_role("Admin", permissions=discord.Permissions(administrator=True))
+        admin = guild.add_member(simcord_env.create_user("admin"), roles=[admin_role])
 
-        result = await alice.slash(channel, "setup")
+        result = await admin.slash(channel, "setup")
         followup = result.followups[0] if result.followups else None
         assert followup is not None
         embed_dict = followup.embeds[0].to_dict() if followup.embeds else {}
         embed_str = str(embed_dict)
         assert "Tsubaki" in embed_str or "Setup" in embed_str or "Bot Role" in embed_str
 
-    async def test_setup_failure_replies_error(self, simcord_env):
+    async def test_setup_missing_permissions_rejected(self, simcord_env):
         guild = simcord_env.create_guild()
         channel = guild.create_text_channel("general")
         alice = guild.add_member(simcord_env.create_user("alice"))
 
+        result = await alice.slash(channel, "setup")
+        assert result.response is not None
+        assert "do not have permission" in result.response.content
+        simcord.asserts.assert_error(simcord_env, discord.app_commands.errors.MissingPermissions)
+
+    async def test_setup_db_unreachable_renders_embed(self, simcord_env):
+        guild = simcord_env.create_guild()
+        channel = guild.create_text_channel("general")
+        admin_role = guild.create_role("Admin", permissions=discord.Permissions(administrator=True))
+        admin = guild.add_member(simcord_env.create_user("admin"), roles=[admin_role])
+
         with patch("setup.db.get_or_create_guild_config", side_effect=Exception("DB exploded")):
-            result = await alice.slash(channel, "setup")
+            result = await admin.slash(channel, "setup")
+
+        followup = result.followups[0] if result.followups else None
+        assert followup is not None
+        assert len(followup.embeds) == 1
+        embed_dict = followup.embeds[0].to_dict()
+        fields = {f["name"]: f["value"] for f in embed_dict.get("fields", [])}
+        assert "💾 Database" in fields
+        assert "❌" in fields["💾 Database"]
+        assert "unreachable" in fields["💾 Database"]
+
+    async def test_setup_unexpected_failure_replies_error(self, simcord_env):
+        guild = simcord_env.create_guild()
+        channel = guild.create_text_channel("general")
+        admin_role = guild.create_role("Admin", permissions=discord.Permissions(administrator=True))
+        admin = guild.add_member(simcord_env.create_user("admin"), roles=[admin_role])
+
+        with patch("setup._build_setup_embed", side_effect=RuntimeError("Embed render crashed")):
+            result = await admin.slash(channel, "setup")
 
         followup = result.followups[0] if result.followups else None
         assert followup is not None
         assert "Setup check failed" in followup.content
+
+    async def test_setup_cmd_error_missing_permissions_not_done(self):
+        import setup as setup_mod
+
+        bot = MagicMock()
+        registered = {}
+
+        def mock_command(**kwargs):
+            def decorator(func):
+                cmd = MagicMock()
+                cmd.callback = func
+                cmd.error = lambda f: setattr(cmd, "on_error", f) or f
+                registered[kwargs.get("name", func.__name__)] = cmd
+                return cmd
+
+            return decorator
+
+        bot.tree.command = mock_command
+        setup_mod.setup(bot)
+        cmd = registered["setup"]
+
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.response.is_done.return_value = False
+        interaction.response.send_message = AsyncMock()
+        error = discord.app_commands.MissingPermissions(["administrator"])
+
+        await cmd.on_error(interaction, error)
+        interaction.response.send_message.assert_awaited_once_with(
+            "❌ You do not have permission to run this command.", ephemeral=True
+        )
+
+    async def test_setup_cmd_error_missing_permissions_done(self):
+        import setup as setup_mod
+
+        bot = MagicMock()
+        registered = {}
+
+        def mock_command(**kwargs):
+            def decorator(func):
+                cmd = MagicMock()
+                cmd.callback = func
+                cmd.error = lambda f: setattr(cmd, "on_error", f) or f
+                registered[kwargs.get("name", func.__name__)] = cmd
+                return cmd
+
+            return decorator
+
+        bot.tree.command = mock_command
+        setup_mod.setup(bot)
+        cmd = registered["setup"]
+
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.response.is_done.return_value = True
+        interaction.followup.send = AsyncMock()
+        error = discord.app_commands.MissingPermissions(["administrator"])
+
+        await cmd.on_error(interaction, error)
+        interaction.followup.send.assert_awaited_once_with(
+            "❌ You do not have permission to run this command.", ephemeral=True
+        )

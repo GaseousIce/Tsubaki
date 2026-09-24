@@ -63,7 +63,27 @@ class TimeoutDurationModal(discord.ui.Modal, title="Set Timeout Duration"):
         self.parent_view = parent_view
         self.duration_input.default = _format_duration(parent_view.cfg.get("timeout_duration", 604800))
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        perms = getattr(interaction.user, "guild_permissions", None)
+        if not perms or not perms.administrator:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Only server administrators can modify anti-phishing settings.",
+                    ephemeral=True,
+                )
+            return False
+        return True
+
     async def on_submit(self, interaction: discord.Interaction):
+        perms = getattr(interaction.user, "guild_permissions", None)
+        if not perms or not perms.administrator:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Only server administrators can modify anti-phishing settings.",
+                    ephemeral=True,
+                )
+            return
+
         from anti_phishing.actions import _parse_duration
 
         duration_str = self.duration_input.value.strip()
@@ -91,7 +111,27 @@ class CustomDMModal(discord.ui.Modal, title="Set Custom DM Message"):
         if current_msg:
             self.dm_input.default = current_msg
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        perms = getattr(interaction.user, "guild_permissions", None)
+        if not perms or not perms.administrator:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Only server administrators can modify anti-phishing settings.",
+                    ephemeral=True,
+                )
+            return False
+        return True
+
     async def on_submit(self, interaction: discord.Interaction):
+        perms = getattr(interaction.user, "guild_permissions", None)
+        if not perms or not perms.administrator:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Only server administrators can modify anti-phishing settings.",
+                    ephemeral=True,
+                )
+            return
+
         value = self.dm_input.value.strip() or None
         self.parent_view.cfg = await db.update_guild_config(interaction.guild_id, dm_message=value)
         embed = _build_settings_embed(interaction.guild, self.parent_view.cfg)
@@ -109,6 +149,7 @@ class SettingsDashboardView(discord.ui.View):
         self.cfg = cfg
 
         enabled = cfg.get("enabled", True)
+        action = cfg.get("action", "timeout")
         self.toggle_btn = discord.ui.Button(
             label="Disable Anti-Phishing" if enabled else "Enable Anti-Phishing",
             style=discord.ButtonStyle.danger if enabled else discord.ButtonStyle.success,
@@ -125,25 +166,25 @@ class SettingsDashboardView(discord.ui.View):
                     label="Timeout",
                     value="timeout",
                     description="Timeout the member",
-                    default=(cfg["action"] == "timeout"),
+                    default=(action == "timeout"),
                 ),
                 discord.SelectOption(
                     label="Kick",
                     value="kick",
                     description="Kick the member",
-                    default=(cfg["action"] == "kick"),
+                    default=(action == "kick"),
                 ),
                 discord.SelectOption(
                     label="Ban",
                     value="ban",
                     description="Ban the member",
-                    default=(cfg["action"] == "ban"),
+                    default=(action == "ban"),
                 ),
                 discord.SelectOption(
                     label="Warn",
                     value="warn",
                     description="DM only, no guild action",
-                    default=(cfg["action"] == "warn"),
+                    default=(action == "warn"),
                 ),
             ],
             custom_id="action_select",
@@ -152,7 +193,7 @@ class SettingsDashboardView(discord.ui.View):
         self.action_select.callback = self.action_callback
         self.add_item(self.action_select)
 
-        if cfg["action"] == "timeout":
+        if action == "timeout":
             self.timeout_btn = discord.ui.Button(
                 label="Set Timeout Duration", style=discord.ButtonStyle.secondary, custom_id="set_timeout", row=2
             )
@@ -170,6 +211,22 @@ class SettingsDashboardView(discord.ui.View):
         )
         self.switch_btn.callback = self.switch_callback
         self.add_item(self.switch_btn)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.guild_id and interaction.guild_id != self.guild_id:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ This component does not belong to this server.", ephemeral=True
+                )
+            return False
+        perms = getattr(interaction.user, "guild_permissions", None)
+        if not perms or not perms.administrator:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Only server administrators can modify anti-phishing settings.", ephemeral=True
+                )
+            return False
+        return True
 
     async def toggle_callback(self, interaction: discord.Interaction):
         new_val = not self.cfg.get("enabled", True)
@@ -237,6 +294,22 @@ class RolesChannelsDashboardView(discord.ui.View):
         self.back_btn.callback = self.back_callback
         self.add_item(self.back_btn)
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.guild_id and interaction.guild_id != self.guild_id:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ This component does not belong to this server.", ephemeral=True
+                )
+            return False
+        perms = getattr(interaction.user, "guild_permissions", None)
+        if not perms or not perms.administrator:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Only server administrators can modify anti-phishing settings.", ephemeral=True
+                )
+            return False
+        return True
+
     async def channel_callback(self, interaction: discord.Interaction):
         selected_ids = [ch.id for ch in self.channel_select.values]
         self.cfg = await db.update_guild_config(interaction.guild_id, alert_channels=selected_ids)
@@ -278,6 +351,7 @@ antiphishing = app_commands.Group(
 
 
 @antiphishing.command(name="stats", description="Show detection stats for this server")
+@app_commands.checks.has_permissions(administrator=True)
 async def cmd_stats(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     try:
@@ -304,14 +378,33 @@ async def cmd_stats(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
+@cmd_stats.error
+async def cmd_stats_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        target = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+        await target("❌ You do not have permission to run this command.", ephemeral=True)
+    else:
+        logger.error("Unhandled error in /antiphishing stats: %s", error)
+
+
 @antiphishing.command(name="settings", description="Open interactive anti-phishing settings dashboard")
+@app_commands.checks.has_permissions(administrator=True)
 async def cmd_settings(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     try:
         cfg = await db.get_or_create_guild_config(interaction.guild_id)
-        embed = _build_settings_embed(interaction.guild, cfg)
-        view = SettingsDashboardView(interaction.guild_id, cfg)
+        embed = _build_settings_embed(interaction.guild, self_cfg := cfg)
+        view = SettingsDashboardView(interaction.guild_id, self_cfg)
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     except Exception as exc:
         logger.exception("antiphishing settings failed: %s", exc)
         await interaction.followup.send("❌ Failed to open settings dashboard.", ephemeral=True)
+
+
+@cmd_settings.error
+async def cmd_settings_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        target = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+        await target("❌ You do not have permission to run this command.", ephemeral=True)
+    else:
+        logger.error("Unhandled error in /antiphishing settings: %s", error)

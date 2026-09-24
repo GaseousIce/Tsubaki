@@ -245,6 +245,221 @@ class TestFetchOfficialBlacklist:
             assert domain.official == {"existing.com"}
 
 
+class TestTrailingDotNormalization:
+    def test_extract_hostnames_trailing_dot(self):
+        result = domain._extract_hostnames(["https://evil.com./claim"])
+        assert "evil.com" in result
+
+    def test_domain_candidates_trailing_dot(self):
+        candidates = domain._domain_candidates("evil.com.")
+        assert candidates == ["evil.com"]
+
+    async def test_find_in_blacklists_trailing_dot_matches_official(self, official_domains):
+        urls = ["https://phishing.xyz./claim"]
+        result = await domain.find_in_blacklists(urls)
+        assert result == ("phishing.xyz", "official_blacklist")
+
+
+class TestHomoglyphAndIDNNormalization:
+    def test_extract_hostnames_cyrillic_homoglyph(self):
+        # Using Cyrillic 'і' (\u0456)
+        urls = ["https://d\u0456scord.com/login"]
+        result = domain._extract_hostnames(urls)
+        assert "d\u0456scord.com" in result
+        assert "xn--dscord-pvf.com" in result
+
+    def test_extract_hostnames_punycode_input(self):
+        urls = ["https://xn--dscord-pvf.com/login"]
+        result = domain._extract_hostnames(urls)
+        assert "xn--dscord-pvf.com" in result
+        assert "d\u0456scord.com" in result
+
+    async def test_find_in_blacklists_homoglyph_matches_punycode_official(self):
+        domain.official.add("xn--dscord-pvf.com")
+        urls = ["https://d\u0456scord.com/login"]
+        result = await domain.find_in_blacklists(urls)
+        assert result[1] == "official_blacklist"
+
+
+class TestTyposquattingEngine:
+    async def test_check_typosquats_catches_discord_mimic(self):
+        urls = ["https://dlscord.com/login"]
+        result = await domain.check_typosquats(urls, check_db=False)
+        assert result == ("dlscord.com", "typosquat (discord.com)")
+
+    async def test_check_typosquats_catches_nitro_gift_combo(self):
+        urls = ["https://discord-nitro.gift/claim"]
+        result = await domain.check_typosquats(urls, check_db=False)
+        assert result == ("discord-nitro.gift", "typosquat (discord.com)")
+
+    async def test_check_typosquats_catches_steam_mimic(self):
+        urls = ["https://steamcommunitv.com/trade"]
+        result = await domain.check_typosquats(urls, check_db=False)
+        assert result == ("steamcommunitv.com", "typosquat (steamcommunity.com)")
+
+    async def test_check_typosquats_legitimate_discord_not_flagged(self):
+        urls = [
+            "https://discord.com",
+            "https://canary.discord.com",
+            "https://discord.gg/invite",
+            "https://discordapp.com/channels",
+            "https://discord.gift/nitrocode",
+        ]
+        result = await domain.check_typosquats(urls, check_db=False)
+        assert result == (None, None)
+
+    async def test_check_typosquats_legitimate_steam_not_flagged(self):
+        urls = ["https://steamcommunity.com", "https://store.steampowered.com"]
+        result = await domain.check_typosquats(urls, check_db=False)
+        assert result == (None, None)
+
+    async def test_check_typosquats_homoglyph_folding(self):
+        # 'dіscord-nitro.ru' with Cyrillic 'і'
+        urls = ["https://d\u0456scord-nitro.ru"]
+        result = await domain.check_typosquats(urls, check_db=False)
+        assert result[0] is not None
+        assert "typosquat (discord.com)" in result[1]
+
+    async def test_check_typosquats_custom_db_pattern(self):
+        urls = ["https://custom-phish.net/login"]
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=MagicMock(rows=[("custom-phish", "discord.com")]))
+        with patch("anti_phishing.domain.db.get_db", AsyncMock(return_value=mock_db)):
+            result = await domain.check_typosquats(urls, check_db=True)
+            assert result == ("custom-phish.net", "typosquat (discord.com)")
+
+    async def test_populate_default_typosquats(self):
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock()
+        with patch("anti_phishing.domain.db.get_db", AsyncMock(return_value=mock_db)):
+            inserted = await domain.populate_default_typosquats()
+            assert inserted == len(domain.DEFAULT_TYPOSQUAT_PATTERNS)
+            assert mock_db.execute.call_count == len(domain.DEFAULT_TYPOSQUAT_PATTERNS)
+
+
+class TestEmbedUrlCompleteness:
+    def test_url_from_embed_author_name(self):
+        class FakeAuthor:
+            name = "Security Check https://auth-verify.xyz/login"
+            url = None
+
+        class FakeEmbed:
+            url = None
+            description = None
+            title = None
+            fields = []
+            footer = None
+            author = FakeAuthor()
+
+        result = domain.extract_urls("", embeds=[FakeEmbed()])
+        assert "https://auth-verify.xyz/login" in result
+
+    def test_url_from_embed_image_and_thumbnail(self):
+        class FakeMedia:
+            url = "https://cdn-evil.com/image.png"
+
+        class FakeThumb:
+            url = "https://cdn-evil.com/thumb.png"
+
+        class FakeEmbed:
+            url = None
+            description = None
+            title = None
+            fields = []
+            footer = None
+            author = None
+            image = FakeMedia()
+            thumbnail = FakeThumb()
+
+        result = domain.extract_urls("", embeds=[FakeEmbed()])
+        assert "https://cdn-evil.com/image.png" in result
+        assert "https://cdn-evil.com/thumb.png" in result
+
+
+class TestParenthesesAndSchemeHandling:
+    def test_url_query_parentheses_preserved(self):
+        text = "Visit https://evil.com/page?ref=(secret_token)&id=1 today"
+        result = domain.extract_urls(text)
+        assert result == ["https://evil.com/page?ref=(secret_token)&id=1"]
+
+    def test_url_markdown_unbalanced_parentheses_stripped(self):
+        text = "Check [this link](https://evil.com/claim) now!"
+        result = domain.extract_urls(text)
+        assert result == ["https://evil.com/claim"]
+
+    def test_url_balanced_parentheses_wikipedia(self):
+        text = "Read https://en.wikipedia.org/wiki/Phishing_(disambiguation) for details"
+        result = domain.extract_urls(text)
+        assert result == ["https://en.wikipedia.org/wiki/phishing_(disambiguation)"]
+
+    def test_extract_urls_uppercase_scheme(self):
+        text = "Check HTTPS://EVIL.COM/PATH and HTTP://TEST.ORG"
+        result = domain.extract_urls(text)
+        assert "https://evil.com/path" in result
+        assert "http://test.org" in result
+
+
+class TestAllowedDomainSet:
+    async def test_find_in_blacklists_bypasses_allowed_domain(self, official_domains):
+        domain.allowed.add("phishing.xyz")
+        try:
+            urls = ["https://phishing.xyz/claim"]
+            result = await domain.find_in_blacklists(urls)
+            assert result == (None, None)
+        finally:
+            domain.allowed.clear()
+
+    async def test_check_typosquats_bypasses_allowed_domain(self):
+        domain.allowed.add("dlscord.com")
+        try:
+            urls = ["https://dlscord.com/login"]
+            result = await domain.check_typosquats(urls, check_db=False)
+            assert result == (None, None)
+        finally:
+            domain.allowed.clear()
+
+
+class TestPublicSuffixIsolation:
+    def test_domain_candidates_public_suffixes(self):
+        assert domain._domain_candidates("innocent.github.io") == ["innocent.github.io"]
+        assert domain._domain_candidates("sub.site.co.uk") == ["sub.site.co.uk", "site.co.uk"]
+        assert domain._domain_candidates("sub.evil.com") == ["sub.evil.com", "evil.com"]
+        assert domain._domain_candidates("evil.com") == ["evil.com"]
+        assert domain._domain_candidates("app.vercel.app") == ["app.vercel.app"]
+        assert domain._domain_candidates("pages.dev") == ["pages.dev"]
+
+    async def test_find_in_blacklists_public_suffix_isolation(self):
+        domain.allowed.add("innocent.github.io")
+        domain.official.add("evil.github.io")
+        try:
+            assert await domain.find_in_blacklists(["https://innocent.github.io"], check_custom_blocklist=False) == (
+                None,
+                None,
+            )
+            assert await domain.find_in_blacklists(["https://evil.github.io"], check_custom_blocklist=False) == (
+                "evil.github.io",
+                "official_blacklist",
+            )
+        finally:
+            domain.allowed.clear()
+            domain.official.discard("evil.github.io")
+
+
+class TestClientSessionReuse:
+    async def test_fetch_blacklist_reuses_provided_session(self):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = AsyncMock(return_value={"domains": ["phishing.xyz"]})
+
+        mock_session = MagicMock()
+        mock_session.get.return_value.__aenter__.return_value = mock_resp
+
+        result = await domain.fetch_blacklist(retries=1, session=mock_session)
+        assert "phishing.xyz" in result
+        # Both calls ran through the provided session
+        assert mock_session.get.call_count == 2
+
+
 @pytest.mark.network
 class TestRealFetchBlacklist:
     """Integration tests that hit the actual GitHub API."""

@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
+import simcord
 
 
 class TestAskCommand:
@@ -63,6 +64,48 @@ class TestAskCommand:
         assert followup is not None
         assert len(followup.content) == 2000
         assert followup.content.endswith("...")
+
+    async def test_ask_mention_injection_suppression(self):
+        """Verify /ask passes allowed_mentions=discord.AllowedMentions.none() to suppress pings."""
+        import commands
+
+        bot = MagicMock()
+        registered_commands = {}
+
+        def mock_command(**kwargs):
+            def decorator(func):
+                cmd = MagicMock()
+                cmd.callback = func
+                cmd.error = lambda f: f
+                registered_commands[kwargs.get("name", func.__name__)] = cmd
+                return cmd
+
+            return decorator
+
+        bot.tree.command = mock_command
+        bot.ai_service = MagicMock()
+        commands.setup(bot)
+        ask_cmd = registered_commands["ask"]
+
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock()
+        cm.__aexit__ = AsyncMock()
+        interaction.channel.typing.return_value = cm
+
+        with patch("commands.ask_tsubaki", new_callable=AsyncMock, return_value="Check @everyone and <@&12345>"):
+            await ask_cmd.callback(interaction, question="ping everyone")
+
+        interaction.followup.send.assert_awaited_once()
+        _, kwargs = interaction.followup.send.call_args
+        assert "allowed_mentions" in kwargs
+        am = kwargs["allowed_mentions"]
+        assert isinstance(am, discord.AllowedMentions)
+        assert am.everyone is False
+        assert am.roles is False
+        assert am.users is False
 
 
 class TestAskErrorHandling:
@@ -422,3 +465,268 @@ class TestTestCommand:
         for i, emb in enumerate(embeds):
             assert emb.url == "https://discord.com/channels/123/456/789"
             assert emb.image.url == f"https://cdn.discordapp.com/{i}.png"
+
+    # --- F39: Runtime permission checks & error handling ---
+
+    async def test_command_requires_manage_messages(self, simcord_env):
+        """Unprivileged member running /test is rejected with MissingPermissions."""
+        guild = simcord_env.create_guild()
+        channel = guild.create_text_channel("general")
+        alice = guild.add_member(simcord_env.create_user("alice"))
+
+        result = await alice.slash(channel, "test", message_id="123456789")
+        assert result.response is not None
+        assert "do not have permission" in result.response.content
+        simcord.asserts.assert_error(simcord_env, discord.app_commands.errors.MissingPermissions)
+
+    async def test_command_allowed_for_admin(self, simcord_env):
+        """Admin member running /test succeeds and proceeds to message resolution."""
+        guild = simcord_env.create_guild()
+        channel = guild.create_text_channel("general")
+        admin_role = guild.create_role("Admin", permissions=discord.Permissions(administrator=True))
+        admin = guild.add_member(simcord_env.create_user("admin"), roles=[admin_role])
+
+        result = await admin.slash(channel, "test", message_id="123456789")
+        followup = result.followups[0] if result.followups else None
+        assert followup is not None
+        assert "Could not find message" in followup.content
+
+    async def test_test_cmd_error_missing_permissions_not_done(self):
+        """Unit test for test_cmd_error when response is not done."""
+        import commands
+
+        bot = MagicMock()
+        registered = {}
+
+        def mock_command(**kwargs):
+            def decorator(func):
+                cmd = MagicMock()
+                cmd.callback = func
+                cmd.error = lambda f: setattr(cmd, "on_error", f) or f
+                registered[kwargs.get("name", func.__name__)] = cmd
+                return cmd
+
+            return decorator
+
+        bot.tree.command = mock_command
+        commands.setup(bot)
+        test_cmd = registered["test"]
+
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.response.is_done.return_value = False
+        interaction.response.send_message = AsyncMock()
+        error = discord.app_commands.MissingPermissions(["manage_messages"])
+
+        await test_cmd.on_error(interaction, error)
+        interaction.response.send_message.assert_awaited_once_with(
+            "❌ You do not have permission to run this command.", ephemeral=True
+        )
+
+    async def test_test_cmd_error_missing_permissions_done(self):
+        """Unit test for test_cmd_error when response is done."""
+        import commands
+
+        bot = MagicMock()
+        registered = {}
+
+        def mock_command(**kwargs):
+            def decorator(func):
+                cmd = MagicMock()
+                cmd.callback = func
+                cmd.error = lambda f: setattr(cmd, "on_error", f) or f
+                registered[kwargs.get("name", func.__name__)] = cmd
+                return cmd
+
+            return decorator
+
+        bot.tree.command = mock_command
+        commands.setup(bot)
+        test_cmd = registered["test"]
+
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.response.is_done.return_value = True
+        interaction.followup.send = AsyncMock()
+        error = discord.app_commands.MissingPermissions(["manage_messages"])
+
+        await test_cmd.on_error(interaction, error)
+        interaction.followup.send.assert_awaited_once_with(
+            "❌ You do not have permission to run this command.", ephemeral=True
+        )
+
+    # --- F40: Cross-channel IDOR protection ---
+
+    def test_can_access_channel_perms(self):
+        """Unit test for _can_access_channel permission evaluation."""
+        from commands import _can_access_channel
+
+        channel = MagicMock(spec=discord.TextChannel)
+        member = MagicMock(spec=discord.Member)
+
+        perms = MagicMock()
+        perms.view_channel = True
+        perms.read_message_history = True
+        channel.permissions_for.return_value = perms
+
+        assert _can_access_channel(channel, member) is True
+
+        perms.view_channel = False
+        assert _can_access_channel(channel, member) is False
+
+        perms.view_channel = True
+        perms.read_message_history = False
+        assert _can_access_channel(channel, member) is False
+
+        assert _can_access_channel(channel, None) is True
+
+    async def test_cross_channel_idor_prevented_with_link(self, simcord_env):
+        """Mod cannot inspect message in secret channel via jump link."""
+        guild = simcord_env.create_guild()
+        general = guild.create_text_channel("general")
+        logs_channel = guild.create_text_channel("bot-logs")
+        everyone = guild.roles["@everyone"]
+        mod_role = guild.create_role("Mod", permissions=discord.Permissions(manage_messages=True))
+
+        secret_ch = guild.create_text_channel(
+            "secret-vault",
+            overwrites={
+                everyone: discord.PermissionOverwrite(view_channel=False),
+                mod_role: discord.PermissionOverwrite(view_channel=False),
+            },
+        )
+        admin = guild.add_member(
+            simcord_env.create_user("admin"),
+            roles=[guild.create_role("Admin", permissions=discord.Permissions(administrator=True))],
+        )
+        mod = guild.add_member(simcord_env.create_user("mod"), roles=[mod_role])
+
+        await admin.send(secret_ch, "Confidential admin password: hunter2")
+        secret_msg = secret_ch.last_message
+        assert secret_msg is not None
+
+        jump_link = f"https://discord.com/channels/{guild.id}/{secret_ch.id}/{secret_msg.id}"
+        result = await mod.slash(general, "test", message_id=jump_link)
+
+        followup = result.followups[0] if result.followups else None
+        assert followup is not None
+        assert "Could not find message" in followup.content
+        assert len(logs_channel.history()) == 0
+
+    async def test_cross_channel_idor_prevented_plain_id(self, simcord_env):
+        """Mod cannot inspect message in secret channel by searching plain message ID."""
+        guild = simcord_env.create_guild()
+        general = guild.create_text_channel("general")
+        logs_channel = guild.create_text_channel("bot-logs")
+        everyone = guild.roles["@everyone"]
+        mod_role = guild.create_role("Mod", permissions=discord.Permissions(manage_messages=True))
+
+        secret_ch = guild.create_text_channel(
+            "secret-vault",
+            overwrites={
+                everyone: discord.PermissionOverwrite(view_channel=False),
+                mod_role: discord.PermissionOverwrite(view_channel=False),
+            },
+        )
+        admin = guild.add_member(
+            simcord_env.create_user("admin"),
+            roles=[guild.create_role("Admin", permissions=discord.Permissions(administrator=True))],
+        )
+        mod = guild.add_member(simcord_env.create_user("mod"), roles=[mod_role])
+
+        await admin.send(secret_ch, "Confidential admin password: hunter2")
+        secret_msg = secret_ch.last_message
+        assert secret_msg is not None
+
+        result = await mod.slash(general, "test", message_id=str(secret_msg.id))
+
+        followup = result.followups[0] if result.followups else None
+        assert followup is not None
+        assert "Could not find message" in followup.content
+        assert len(logs_channel.history()) == 0
+
+    async def test_cross_channel_authorized_access(self, simcord_env):
+        """Mod can inspect message across channels when they have view & read permissions."""
+        guild = simcord_env.create_guild()
+        general = guild.create_text_channel("general")
+        public_other = guild.create_text_channel("public-chat")
+        logs_channel = guild.create_text_channel("bot-logs")
+        mod_role = guild.create_role("Mod", permissions=discord.Permissions(manage_messages=True))
+        alice = guild.add_member(simcord_env.create_user("alice"))
+        mod = guild.add_member(simcord_env.create_user("mod"), roles=[mod_role])
+
+        await alice.send(public_other, "Public announcement to inspect")
+        target_msg = public_other.last_message
+
+        result = await mod.slash(general, "test", message_id=str(target_msg.id))
+        followup = result.followups[0] if result.followups else None
+        assert followup is not None
+        assert "No action was taken" in followup.content
+        assert len(logs_channel.history()) == 1
+
+    # --- F41: Strict log channel resolution ---
+
+    def test_resolve_log_channel_ignores_substring_false_positives(self):
+        """_resolve_log_channel does not match #changelog, #blog, #catalog, etc."""
+        from commands import _resolve_log_channel
+
+        guild = MagicMock(spec=discord.Guild)
+        guild.me = None
+        false_positive_names = ["changelog", "blog", "catalog", "prologue", "backlog", "login", "logo"]
+        guild.text_channels = []
+        for name in false_positive_names:
+            ch = MagicMock(spec=discord.TextChannel)
+            ch.name = name
+            guild.text_channels.append(ch)
+
+        fallback_ch = MagicMock(spec=discord.TextChannel)
+        resolved = _resolve_log_channel(guild, fallback_ch, alert_channel_ids=[])
+        assert resolved == fallback_ch
+
+    def test_resolve_log_channel_matches_valid_tokens(self):
+        """_resolve_log_channel correctly matches log and alert channel variations."""
+        from commands import _resolve_log_channel
+
+        guild = MagicMock(spec=discord.Guild)
+        guild.me = None
+        valid_names = ["audit-log", "server-logs", "bot_log", "modlogs", "alerts", "mod-alert"]
+        for name in valid_names:
+            ch = MagicMock(spec=discord.TextChannel)
+            ch.name = name
+            guild.text_channels = [ch]
+            fallback_ch = MagicMock(spec=discord.TextChannel)
+            resolved = _resolve_log_channel(guild, fallback_ch, alert_channel_ids=[])
+            assert resolved == ch, f"Failed to match valid log channel name: {name}"
+
+    # --- F44: Redundant typing removal in /ask ---
+
+    async def test_ask_channel_none_resilience(self):
+        """/ask completes even when interaction.channel is None."""
+        import commands
+
+        bot = MagicMock()
+        registered = {}
+
+        def mock_command(**kwargs):
+            def decorator(func):
+                cmd = MagicMock()
+                cmd.callback = func
+                cmd.error = lambda f: f
+                registered[kwargs.get("name", func.__name__)] = cmd
+                return cmd
+
+            return decorator
+
+        bot.tree.command = mock_command
+        bot.ai_service = MagicMock()
+        commands.setup(bot)
+        ask_cmd = registered["ask"]
+
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.channel = None
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+
+        with patch("commands.ask_tsubaki", new_callable=AsyncMock, return_value="Hello, world!"):
+            await ask_cmd.callback(interaction, question="hi")
+
+        interaction.followup.send.assert_awaited_once()
+        assert interaction.followup.send.call_args.args[0] == "Hello, world!"

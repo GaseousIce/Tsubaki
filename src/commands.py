@@ -11,6 +11,9 @@ from groq_service import ask_tsubaki
 logger = logging.getLogger("discord")
 
 _MSG_LINK_RE = re.compile(r"https?://(?:ptb\.|canary\.)?discord(?:app)?\.com/channels/\d+/(\d+)/(\d+)")
+_LOG_CHANNEL_RE = re.compile(
+    r"(?:^|[\s\-_])(log|logs|alert|alerts|modlog|modlogs|botlog|botlogs|auditlog|auditlogs)(?:$|[\s\-_])"
+)
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 
 
@@ -52,28 +55,51 @@ def _parse_message_reference(ref: str) -> tuple[int | None, int | None]:
         return None, None
 
 
+def _can_access_channel(
+    channel: discord.abc.Messageable,
+    caller: discord.Member | discord.User | None,
+    guild: discord.Guild | None = None,
+) -> bool:
+    if caller is None:
+        return True
+    member = caller
+    if not isinstance(member, discord.Member) and guild is not None:
+        member = guild.get_member(caller.id)
+    if isinstance(member, discord.Member) and hasattr(channel, "permissions_for"):
+        perms = channel.permissions_for(member)
+        return bool(getattr(perms, "view_channel", False) and getattr(perms, "read_message_history", False))
+    return True
+
+
 async def _fetch_target_message(
     guild: discord.Guild,
     channel: discord.abc.Messageable,
     channel_id: int | None,
     message_id: int,
+    caller: discord.Member | discord.User | None = None,
 ) -> discord.Message | None:
     if channel_id:
         target_ch = guild.get_channel(channel_id)
         if target_ch and hasattr(target_ch, "fetch_message"):
+            if not _can_access_channel(target_ch, caller, guild):
+                return None
             try:
                 return await target_ch.fetch_message(message_id)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 return None
+        return None
 
     if hasattr(channel, "fetch_message"):
-        try:
-            return await channel.fetch_message(message_id)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            pass
+        if _can_access_channel(channel, caller, guild):
+            try:
+                return await channel.fetch_message(message_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
 
     for ch in guild.text_channels:
         if ch.id == getattr(channel, "id", None):
+            continue
+        if not _can_access_channel(ch, caller, guild):
             continue
         try:
             return await ch.fetch_message(message_id)
@@ -101,8 +127,7 @@ def _resolve_log_channel(
                     return ch
 
     for ch in guild.text_channels:
-        name = ch.name.lower()
-        if "log" in name or "alert" in name:
+        if _LOG_CHANNEL_RE.search(ch.name.lower()):
             if me:
                 perms = ch.permissions_for(me)
                 if perms.view_channel and perms.send_messages and perms.embed_links:
@@ -249,20 +274,20 @@ def setup(bot, groq_model: str = "openai/gpt-oss-120b") -> None:
 
         await interaction.response.defer(thinking=True)
         try:
-            async with interaction.channel.typing():
-                answer = await ask_tsubaki(ai_service, question, model=groq_model)
+            answer = await ask_tsubaki(ai_service, question, model=groq_model)
         except Exception:
             logger.exception("Groq request for /ask failed")
             await interaction.followup.send(
                 "Uuu... (╥﹏╥) My brainwaves got all tangled up! I couldn't reach my thoughts right now. "
-                "Please try asking me again in a bit, okay? (｡>﹏<｡)"
+                "Please try asking me again in a bit, okay? (｡>﹏<｡)",
+                allowed_mentions=discord.AllowedMentions.none(),
             )
             return
 
         if len(answer) > 2000:
             answer = f"{answer[:1997]}..."
 
-        await interaction.followup.send(answer)
+        await interaction.followup.send(answer, allowed_mentions=discord.AllowedMentions.none())
 
     @ask.error
     async def ask_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -286,7 +311,8 @@ def setup(bot, groq_model: str = "openai/gpt-oss-120b") -> None:
         description="Inspect a message by ID and log it to the logs channel without taking action",
     )
     @app_commands.guild_only()
-    @app_commands.default_permissions(administrator=True)
+    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.checks.has_permissions(manage_messages=True)
     @app_commands.describe(message_id="Message ID or link to inspect and log")
     async def test_cmd(interaction: discord.Interaction, message_id: str):
         await interaction.response.defer(ephemeral=True)
@@ -302,7 +328,9 @@ def setup(bot, groq_model: str = "openai/gpt-oss-120b") -> None:
             )
             return
 
-        target_message = await _fetch_target_message(interaction.guild, interaction.channel, cid, mid)
+        target_message = await _fetch_target_message(
+            interaction.guild, interaction.channel, cid, mid, caller=interaction.user
+        )
         if target_message is None:
             await interaction.followup.send(
                 f"❌ Could not find message `{mid}` in accessible channels.", ephemeral=True
@@ -348,3 +376,20 @@ def setup(bot, groq_model: str = "openai/gpt-oss-120b") -> None:
             f"✅ Message `{mid}` logged to {log_channel.mention}. No action was taken against the message or user.",
             ephemeral=True,
         )
+
+    @test_cmd.error
+    async def test_cmd_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+        try:
+            if isinstance(error, app_commands.MissingPermissions):
+                target = (
+                    interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+                )
+                await target("❌ You do not have permission to run this command.", ephemeral=True)
+            else:
+                logger.error("Unhandled error in /test command: %s", error)
+                target = (
+                    interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+                )
+                await target("An error occurred.", ephemeral=True)
+        except discord.HTTPException:
+            pass

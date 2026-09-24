@@ -51,14 +51,19 @@ SYSTEM_PROMPT = (
 )
 
 
-def get_groq_client(api_key: str | None = None) -> AsyncGroq:
+def get_groq_client(api_key: str | None = None, timeout: float = 15.0) -> AsyncGroq:
     key = api_key or os.getenv("GROQ_API_KEY")
     if not key:
         raise ValueError("GROQ_API_KEY is not set")
-    return AsyncGroq(api_key=key)
+    return AsyncGroq(api_key=key, timeout=timeout)
 
 
-async def ask_tsubaki(client: AsyncGroq, question: str, model: str | None = None) -> str:
+async def ask_tsubaki(
+    client: AsyncGroq,
+    question: str,
+    model: str | None = None,
+    timeout: float = 15.0,
+) -> str:
     resolved_model = os.getenv("GROQ_MODEL") or model or "openai/gpt-oss-120b"
     completion = await client.chat.completions.create(
         model=resolved_model,
@@ -68,6 +73,13 @@ async def ask_tsubaki(client: AsyncGroq, question: str, model: str | None = None
         ],
         temperature=0.8,
         max_tokens=500,
+        timeout=timeout,
     )
-    text = (completion.choices[0].message.content or "").strip()
+    if not getattr(completion, "choices", None):
+        return "I could not generate a response right now. Please try again."
+    choice = completion.choices[0]
+    message = getattr(choice, "message", None)
+    if message is None:
+        return "I could not generate a response right now. Please try again."
+    text = (getattr(message, "content", None) or "").strip()
     return text or "I could not generate a response right now. Please try again."

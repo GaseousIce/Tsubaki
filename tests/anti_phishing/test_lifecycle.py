@@ -34,6 +34,7 @@ class TestLifecycleListenersAndTasks:
                 task.is_running.return_value = False
                 task.start = MagicMock()
                 task.before_loop = lambda bfunc: bfunc
+                task.error = MagicMock()
                 captured_loops[func.__name__] = task
                 return task
 
@@ -84,6 +85,56 @@ class TestLifecycleListenersAndTasks:
             mock_log.assert_called_once()
             assert "Failed to prune stale rate-limit entries" in mock_log.call_args[0][0]
 
+    async def test_prune_rate_limits_error_handler(self, setup_context):
+        _, _, loops = setup_context
+        prune_task = loops["prune_rate_limits"]
+        error_handler = prune_task.error.call_args[0][0]
+
+        with patch("anti_phishing.logger.error") as mock_log:
+            await error_handler(RuntimeError("prune loop crashed"))
+            mock_log.assert_called_once()
+            assert "Unhandled error in prune_rate_limits loop" in mock_log.call_args[0][0]
+
+    async def test_refresh_blacklist_loop_success(self, setup_context):
+        _, _, loops = setup_context
+        refresh_task = loops["refresh_blacklist"]
+
+        with patch("anti_phishing.fetch_official_blacklist", new_callable=AsyncMock) as mock_fetch:
+            await refresh_task.coro()
+            mock_fetch.assert_awaited_once()
+
+    async def test_refresh_blacklist_loop_exception_handled(self, setup_context):
+        _, _, loops = setup_context
+        refresh_task = loops["refresh_blacklist"]
+
+        with (
+            patch("anti_phishing.fetch_official_blacklist", side_effect=Exception("network down")),
+            patch("anti_phishing.logger.warning") as mock_log,
+        ):
+            await refresh_task.coro()
+            mock_log.assert_called_once()
+            assert "Failed to refresh official blacklist" in mock_log.call_args[0][0]
+
+    async def test_refresh_blacklist_error_handler(self, setup_context):
+        _, _, loops = setup_context
+        refresh_task = loops["refresh_blacklist"]
+        error_handler = refresh_task.error.call_args[0][0]
+
+        with patch("anti_phishing.logger.error") as mock_log:
+            await error_handler(RuntimeError("refresh loop crashed"))
+            mock_log.assert_called_once()
+            assert "Unhandled error in refresh_blacklist loop" in mock_log.call_args[0][0]
+
+    async def test_recover_database_error_handler(self, setup_context):
+        _, _, loops = setup_context
+        recover_task = loops["recover_database"]
+        error_handler = recover_task.error.call_args[0][0]
+
+        with patch("anti_phishing.logger.error") as mock_log:
+            await error_handler(RuntimeError("recovery loop crashed"))
+            mock_log.assert_called_once()
+            assert "Unhandled error in recover_database loop" in mock_log.call_args[0][0]
+
     async def test_on_ready_success(self, setup_context):
         bot, listeners, loops = setup_context
         bot.guilds = [MagicMock(id=10)]
@@ -93,6 +144,7 @@ class TestLifecycleListenersAndTasks:
             mock_cfg.assert_awaited_once_with(10)
 
         assert loops["prune_rate_limits"].start.called
+        assert loops["refresh_blacklist"].start.called
         assert loops["recover_database"].start.called
 
     async def test_on_ready_backfill_failure(self, setup_context):
